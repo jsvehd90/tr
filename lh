@@ -830,7 +830,7 @@ if not na(ph)
         array.shift(phTypes)
 
 if not na(pl)
-    plType = na(lastPivotLow) or pl > lastPivotLow ? "HL" : "LL"
+    plType = na(lastPivotLow) ? "LL" : (pl > lastPivotLow ? "HL" : "LL")
     array.push(plBarIndices, bar_index - pivotBars)
     array.push(plTypes, plType)
     lastPivotLow := pl
@@ -1155,7 +1155,7 @@ if lEntryPhase == 2 and shortIsOpen and not allowFlip
     lEntryPhase := 0
 
 if lEntryPhase == 2
-    if bar_index - lEntrySignalBar == pivotLongEntryWinFwd
+    if bar_index - lEntrySignalBar >= pivotLongEntryWinFwd + pivotBars
         [pF, pE, _] = pivotMultiPatternDetector(
              usePivotLongEntryA, pivotLongEntryAFirst, pivotLongEntryASecond,
              usePivotLongEntryB, pivotLongEntryBFirst, pivotLongEntryBSecond,
@@ -1314,7 +1314,7 @@ if longIsOpen and lPhase == 0 and not lStopActive and bar_index > lEntryBar
 
 // ОЖИДАНИЕ ОКНА ПИВОТА
 if longIsOpen and lPhase == 2
-    if bar_index - lSignalBar == pivotLongExitWinFwd
+    if bar_index - lSignalBar >= pivotLongExitWinFwd + pivotBars
         [pF, pE, maxLastBar] = pivotMultiPatternDetector(
              usePivotLongExitA, pivotLongExitAFirst, pivotLongExitASecond,
              usePivotLongExitB, pivotLongExitBFirst, pivotLongExitBSecond,
@@ -1477,7 +1477,7 @@ if sEntryPhase == 2 and longIsOpen and not allowFlip
     sEntryPhase := 0
 
 if sEntryPhase == 2
-    if bar_index - sEntrySignalBar == pivotShortEntryWinFwd
+    if bar_index - sEntrySignalBar >= pivotShortEntryWinFwd + pivotBars
         [pF, pE, _] = pivotMultiPatternDetector(
              usePivotShortEntryA, pivotShortEntryAFirst, pivotShortEntryASecond,
              usePivotShortEntryB, pivotShortEntryBFirst, pivotShortEntryBSecond,
@@ -1634,7 +1634,7 @@ if shortIsOpen and sPhase == 0 and not sStopActive and bar_index > sEntryBar
 
 // ОЖИДАНИЕ ОКНА ПИВОТА
 if shortIsOpen and sPhase == 2
-    if bar_index - sSignalBar == pivotShortExitWinFwd
+    if bar_index - sSignalBar >= pivotShortExitWinFwd + pivotBars
         [pF, pE, maxLastBar] = pivotMultiPatternDetector(
              usePivotShortExitA, pivotShortExitAFirst, pivotShortExitASecond,
              usePivotShortExitB, pivotShortExitBFirst, pivotShortExitBSecond,
