@@ -26,7 +26,6 @@ vfiVcoef  = 2.5
 minRedCandles     = input.int(3, "Мин. красных свечей перед покупкой (Лонг) / зелёных перед продажей (Шорт)", minval=1)
 signalWindowLong  = input.int(5, "Окно поиска сигнала при выходе из Лонга", minval=0)
 signalWindowShort = input.int(5, "Окно поиска сигнала при выходе из Шорта", minval=0)
-sellWindowBars    = input.int(3, "Окно прямой продажи RSI/VFI (LSD/SSD свечей назад)", minval=0)
 
 showTable  = input.bool(true, "Показывать таблицу", group="Отображение")
 showLabels = input.bool(true, "Показывать метки",    group="Отображение")
@@ -817,16 +816,23 @@ var array<string> phTypes        = array.new_string()
 var array<int>    plBarIndices   = array.new_int()
 var array<string> plTypes        = array.new_string()
 
+var float lastPivotHigh = na
+var float lastPivotLow  = na
+
 if not na(ph)
+    phType = na(lastPivotHigh) or ph > lastPivotHigh ? "HH" : "LH"
     array.push(phBarIndices, bar_index - pivotBars)
-    array.push(phTypes, "HH") // Упрощённо (между ними любые -> всё равно)
+    array.push(phTypes, phType)
+    lastPivotHigh := ph
     if array.size(phBarIndices) > 500
         array.shift(phBarIndices)
         array.shift(phTypes)
 
 if not na(pl)
+    plType = na(lastPivotLow) or pl > lastPivotLow ? "HL" : "LL"
     array.push(plBarIndices, bar_index - pivotBars)
-    array.push(plTypes, "LL")
+    array.push(plTypes, plType)
+    lastPivotLow := pl
     if array.size(plBarIndices) > 500
         array.shift(plBarIndices)
         array.shift(plTypes)
@@ -862,7 +868,7 @@ matchExit2(series float v1, string o1, float t1, series float v2, string o2, flo
             if is_met(v1[j], o1, t1)
                 met := true
                 break
-    met
+    [met, 0]
 
 matchExit3(series float v1, string o1, float t1, series float v2, string o2, float t2, series float v3, string o3, float t3, int w) =>
     met = false
@@ -884,7 +890,7 @@ matchExit3(series float v1, string o1, float t1, series float v2, string o2, flo
                 for k = math.max(0, j-w) to j+w
                     if is_met(v1[k], o1, t1)
                         met := true
-    met
+    [met, 0]
 
 // ═══════════════════════════════════════════════════════════════════════════
 // УНИВЕРСАЛЬНЫЙ ДЕТЕКТОР ПИВОТ-ПАТТЕРНОВ
@@ -900,29 +906,33 @@ findSinglePivotPair(firstType, secondType, windowBack, windowFwd, signalBar) =>
     
     if useHighFirst and array.size(phBarIndices) > 0
         for i = 0 to array.size(phBarIndices) - 1
-            pivotBar = array.get(phBarIndices, i)
-            if pivotBar >= startBar and pivotBar <= endBar
+            pivotBar  = array.get(phBarIndices, i)
+            pivotType = array.get(phTypes, i)
+            if pivotBar >= startBar and pivotBar <= endBar and pivotType == firstType
                 firstFoundBar := pivotBar
                 break
     if not useHighFirst and array.size(plBarIndices) > 0
         for i = 0 to array.size(plBarIndices) - 1
-            pivotBar = array.get(plBarIndices, i)
-            if pivotBar >= startBar and pivotBar <= endBar
+            pivotBar  = array.get(plBarIndices, i)
+            pivotType = array.get(plTypes, i)
+            if pivotBar >= startBar and pivotBar <= endBar and pivotType == firstType
                 firstFoundBar := pivotBar
                 break
     
     if firstFoundBar >= 0
         if useHighSecond and array.size(phBarIndices) > 0
             for i = 0 to array.size(phBarIndices) - 1
-                pivotBar = array.get(phBarIndices, i)
-                if pivotBar > firstFoundBar and pivotBar <= endBar
+                pivotBar  = array.get(phBarIndices, i)
+                pivotType = array.get(phTypes, i)
+                if pivotBar > firstFoundBar and pivotBar <= endBar and pivotType == secondType
                     found := true
                     lastPivot := pivotBar
                     break
         if not useHighSecond and array.size(plBarIndices) > 0
             for i = 0 to array.size(plBarIndices) - 1
-                pivotBar = array.get(plBarIndices, i)
-                if pivotBar > firstFoundBar and pivotBar <= endBar
+                pivotBar  = array.get(plBarIndices, i)
+                pivotType = array.get(plTypes, i)
+                if pivotBar > firstFoundBar and pivotBar <= endBar and pivotType == secondType
                     found := true
                     lastPivot := pivotBar
                     break
@@ -1105,6 +1115,9 @@ if enableLong and isFirstGreenAfterRed
         lBuySignal := true
 
 var int lLastExitBar = na
+var int    lEntryPhase       = 0
+var int    lEntrySignalBar   = na
+var string lPendingBuyReason = ""
 lBuyBlocked = false
 if lBuySignal
     if lbbUseSale and not na(lLastExitBar) and (bar_index - lLastExitBar) <= lbbSaleBars
@@ -1116,8 +1129,8 @@ if lBuySignal
         if checkRange(0, lbbVfiBars - 1, vfi, lbbVfiOp, lbbVfiVal)
             lBuyBlocked := true
 
-if lBuySignal and not lBuyBlocked
-    pivotEntryOk = true
+lDoLongEntry = false
+if lBuySignal and not lBuyBlocked and lEntryPhase == 0
     if usePivotLongEntryA or usePivotLongEntryB or usePivotLongEntryC or usePivotLongEntryD
         [pF, pE, _] = pivotMultiPatternDetector(
              usePivotLongEntryA, pivotLongEntryAFirst, pivotLongEntryASecond,
@@ -1127,29 +1140,51 @@ if lBuySignal and not lBuyBlocked
              pivotLongEntryWinBack, pivotLongEntryWinFwd, bar_index)
         if pF
             pivotDetectorResult := "Long Entry: " + pE
+            lDoLongEntry := true
         else
-            pivotEntryOk := false
-            
-    if pivotEntryOk
-        // FLIP логика
-        if allowFlip and shortIsOpen
-            profitPct = ((sEntryPrice - close) / sEntryPrice * 100)
-            lblColor  = profitPct >= 0 ? color.new(color.green, 10) : color.new(color.red, 10)
-            strategy.close("Short", comment="Закрыт (Flip)")
-            shortIsOpen := false
-            sStopActive := false
-            sPhase      := 0
-            if showLabels
-                label.new(bar_index, high, "ЗАКРЫТИЕ ШОРТ (Flip)\nP/L: " + str.tostring(profitPct, "#.##") + "%", color=lblColor, textcolor=color.white, style=label.style_label_down, size=size.small)
-        
-        // Открытие
-        if not longIsOpen
-            strategy.entry("Long", strategy.long)
-            longIsOpen  := true
-            lEntryPrice := close
-            lEntryBar   := bar_index
-            if showLabels
-                label.new(bar_index, low, "ПОКУПКА\n" + lBuyReason, color=color.green, textcolor=color.white, style=label.style_label_up, size=size.normal)
+            lEntryPhase       := 2
+            lEntrySignalBar   := bar_index
+            lPendingBuyReason := lBuyReason
+    else
+        lDoLongEntry := true
+
+if lEntryPhase == 2 and shortIsOpen and not allowFlip
+    lEntryPhase := 0
+
+if lEntryPhase == 2
+    if bar_index - lEntrySignalBar == pivotLongEntryWinFwd
+        [pF, pE, _] = pivotMultiPatternDetector(
+             usePivotLongEntryA, pivotLongEntryAFirst, pivotLongEntryASecond,
+             usePivotLongEntryB, pivotLongEntryBFirst, pivotLongEntryBSecond,
+             usePivotLongEntryC, pivotLongEntryCFirst, pivotLongEntryCSecond,
+             usePivotLongEntryD, pivotLongEntryDFirst, pivotLongEntryDSecond,
+             pivotLongEntryWinBack, pivotLongEntryWinFwd, lEntrySignalBar)
+        lEntryPhase := 0
+        if pF
+            pivotDetectorResult := "Long Entry: " + pE
+            lBuyReason   := lPendingBuyReason
+            lDoLongEntry := true
+
+if lDoLongEntry
+    // FLIP логика
+    if allowFlip and shortIsOpen
+        profitPct = ((sEntryPrice - close) / sEntryPrice * 100)
+        lblColor  = profitPct >= 0 ? color.new(color.green, 10) : color.new(color.red, 10)
+        strategy.close("Short", comment="Закрыт (Flip)")
+        shortIsOpen := false
+        sStopActive := false
+        sPhase      := 0
+        if showLabels
+            label.new(bar_index, high, "ЗАКРЫТИЕ ШОРТ (Flip)\nP/L: " + str.tostring(profitPct, "#.##") + "%", color=lblColor, textcolor=color.white, style=label.style_label_down, size=size.small)
+    
+    // Открытие
+    if not longIsOpen
+        strategy.entry("Long", strategy.long)
+        longIsOpen  := true
+        lEntryPrice := close
+        lEntryBar   := bar_index
+        if showLabels
+            label.new(bar_index, low, "ПОКУПКА\n" + lBuyReason, color=color.green, textcolor=color.white, style=label.style_label_up, size=size.normal)
 
 // ═══════════════════════════════════════════════════════════════════════════
 // ЛОГИКА ПРОДАЖИ (ЛОНГ)
@@ -1180,14 +1215,23 @@ lSellMet    = false
 lCurSellRsn = ""
 
 if longIsOpen and lPhase == 0 and not lStopActive and bar_index > lEntryBar
-    if not lSellMet and enableLS1 and matchExit2(rsi, ls1RsiOp, ls1RsiVal, vfi, ls1VfiOp, ls1VfiVal, signalWindowLong)
-        lSellMet := true, lCurSellRsn := "LS1"
-    if not lSellMet and enableLS2 and matchExit2(rsi, ls2RsiOp, ls2RsiVal, vfi, ls2VfiOp, ls2VfiVal, signalWindowLong)
-        lSellMet := true, lCurSellRsn := "LS2"
-    if not lSellMet and enableLS3 and matchExit2(rsi, ls3RsiOp, ls3RsiVal, vfi, ls3VfiOp, ls3VfiVal, signalWindowLong)
-        lSellMet := true, lCurSellRsn := "LS3"
-    if not lSellMet and enableLS4 and matchExit2(rsi, ls4RsiOp, ls4RsiVal, vfi, ls4VfiOp, ls4VfiVal, signalWindowLong)
-        lSellMet := true, lCurSellRsn := "LS4"
+    lSellOff = 0
+    if not lSellMet and enableLS1
+        [_m, _o] = matchExit2(rsi, ls1RsiOp, ls1RsiVal, vfi, ls1VfiOp, ls1VfiVal, signalWindowLong)
+        if _m
+            lSellMet := true, lCurSellRsn := "LS1", lSellOff := _o
+    if not lSellMet and enableLS2
+        [_m, _o] = matchExit2(rsi, ls2RsiOp, ls2RsiVal, vfi, ls2VfiOp, ls2VfiVal, signalWindowLong)
+        if _m
+            lSellMet := true, lCurSellRsn := "LS2", lSellOff := _o
+    if not lSellMet and enableLS3
+        [_m, _o] = matchExit2(rsi, ls3RsiOp, ls3RsiVal, vfi, ls3VfiOp, ls3VfiVal, signalWindowLong)
+        if _m
+            lSellMet := true, lCurSellRsn := "LS3", lSellOff := _o
+    if not lSellMet and enableLS4
+        [_m, _o] = matchExit2(rsi, ls4RsiOp, ls4RsiVal, vfi, ls4VfiOp, ls4VfiVal, signalWindowLong)
+        if _m
+            lSellMet := true, lCurSellRsn := "LS4", lSellOff := _o
     if not lSellMet and enableLS5 and matchExit1(rsi, ls5RsiOp, ls5RsiVal)
         lSellMet := true, lCurSellRsn := "LS5"
     if not lSellMet and enableLS6 and matchExit1(rsi, ls6RsiOp, ls6RsiVal)
@@ -1208,34 +1252,58 @@ if longIsOpen and lPhase == 0 and not lStopActive and bar_index > lEntryBar
         lSellMet := true, lCurSellRsn := "LS13a"
     if not lSellMet and enableLS13b and matchExit1(diPos, ls13bDiOp, ls13bDiVal)
         lSellMet := true, lCurSellRsn := "LS13b"
-    if not lSellMet and enableLS14 and matchExit2(rsi, ls14RsiOp, ls14RsiVal, diPos, ls14DiOp, ls14DiVal, signalWindowLong)
-        lSellMet := true, lCurSellRsn := "LS14a"
-    if not lSellMet and enableLS14b and matchExit2(rsi, ls14bRsiOp, ls14bRsiVal, diPos, ls14bDiOp, ls14bDiVal, signalWindowLong)
-        lSellMet := true, lCurSellRsn := "LS14b"
-    if not lSellMet and enableLS14c and matchExit2(rsi, ls14cRsiOp, ls14cRsiVal, diPos, ls14cDiOp, ls14cDiVal, signalWindowLong)
-        lSellMet := true, lCurSellRsn := "LS14c"
-    if not lSellMet and enableLS14d and matchExit2(rsi, ls14dRsiOp, ls14dRsiVal, diPos, ls14dDiOp, ls14dDiVal, signalWindowLong)
-        lSellMet := true, lCurSellRsn := "LS14d"
-    if not lSellMet and enableLS15 and matchExit2(vfi, ls15VfiOp, ls15VfiVal, diPos, ls15DiOp, ls15DiVal, signalWindowLong)
-        lSellMet := true, lCurSellRsn := "LS15a"
-    if not lSellMet and enableLS15b and matchExit2(vfi, ls15bVfiOp, ls15bVfiVal, diPos, ls15bDiOp, ls15bDiVal, signalWindowLong)
-        lSellMet := true, lCurSellRsn := "LS15b"
-    if not lSellMet and enableLS15c and matchExit2(vfi, ls15cVfiOp, ls15cVfiVal, diPos, ls15cDiOp, ls15cDiVal, signalWindowLong)
-        lSellMet := true, lCurSellRsn := "LS15c"
-    if not lSellMet and enableLS15d and matchExit2(vfi, ls15dVfiOp, ls15dVfiVal, diPos, ls15dDiOp, ls15dDiVal, signalWindowLong)
-        lSellMet := true, lCurSellRsn := "LS15d"
-    if not lSellMet and enableLS16 and matchExit3(rsi, ls16RsiOp, ls16RsiVal, vfi, ls16VfiOp, ls16VfiVal, diPos, ls16DiOp, ls16DiVal, signalWindowLong)
-        lSellMet := true, lCurSellRsn := "LS16a"
-    if not lSellMet and enableLS16b and matchExit3(rsi, ls16bRsiOp, ls16bRsiVal, vfi, ls16bVfiOp, ls16bVfiVal, diPos, ls16bDiOp, ls16bDiVal, signalWindowLong)
-        lSellMet := true, lCurSellRsn := "LS16b"
-    if not lSellMet and enableLS16c and matchExit3(rsi, ls16cRsiOp, ls16cRsiVal, vfi, ls16cVfiOp, ls16cVfiVal, diPos, ls16cDiOp, ls16cDiVal, signalWindowLong)
-        lSellMet := true, lCurSellRsn := "LS16c"
-    if not lSellMet and enableLS16d and matchExit3(rsi, ls16dRsiOp, ls16dRsiVal, vfi, ls16dVfiOp, ls16dVfiVal, diPos, ls16dDiOp, ls16dDiVal, signalWindowLong)
-        lSellMet := true, lCurSellRsn := "LS16d"
+    if not lSellMet and enableLS14
+        [_m, _o] = matchExit2(rsi, ls14RsiOp, ls14RsiVal, diPos, ls14DiOp, ls14DiVal, signalWindowLong)
+        if _m
+            lSellMet := true, lCurSellRsn := "LS14a", lSellOff := _o
+    if not lSellMet and enableLS14b
+        [_m, _o] = matchExit2(rsi, ls14bRsiOp, ls14bRsiVal, diPos, ls14bDiOp, ls14bDiVal, signalWindowLong)
+        if _m
+            lSellMet := true, lCurSellRsn := "LS14b", lSellOff := _o
+    if not lSellMet and enableLS14c
+        [_m, _o] = matchExit2(rsi, ls14cRsiOp, ls14cRsiVal, diPos, ls14cDiOp, ls14cDiVal, signalWindowLong)
+        if _m
+            lSellMet := true, lCurSellRsn := "LS14c", lSellOff := _o
+    if not lSellMet and enableLS14d
+        [_m, _o] = matchExit2(rsi, ls14dRsiOp, ls14dRsiVal, diPos, ls14dDiOp, ls14dDiVal, signalWindowLong)
+        if _m
+            lSellMet := true, lCurSellRsn := "LS14d", lSellOff := _o
+    if not lSellMet and enableLS15
+        [_m, _o] = matchExit2(vfi, ls15VfiOp, ls15VfiVal, diPos, ls15DiOp, ls15DiVal, signalWindowLong)
+        if _m
+            lSellMet := true, lCurSellRsn := "LS15a", lSellOff := _o
+    if not lSellMet and enableLS15b
+        [_m, _o] = matchExit2(vfi, ls15bVfiOp, ls15bVfiVal, diPos, ls15bDiOp, ls15bDiVal, signalWindowLong)
+        if _m
+            lSellMet := true, lCurSellRsn := "LS15b", lSellOff := _o
+    if not lSellMet and enableLS15c
+        [_m, _o] = matchExit2(vfi, ls15cVfiOp, ls15cVfiVal, diPos, ls15cDiOp, ls15cDiVal, signalWindowLong)
+        if _m
+            lSellMet := true, lCurSellRsn := "LS15c", lSellOff := _o
+    if not lSellMet and enableLS15d
+        [_m, _o] = matchExit2(vfi, ls15dVfiOp, ls15dVfiVal, diPos, ls15dDiOp, ls15dDiVal, signalWindowLong)
+        if _m
+            lSellMet := true, lCurSellRsn := "LS15d", lSellOff := _o
+    if not lSellMet and enableLS16
+        [_m, _o] = matchExit3(rsi, ls16RsiOp, ls16RsiVal, vfi, ls16VfiOp, ls16VfiVal, diPos, ls16DiOp, ls16DiVal, signalWindowLong)
+        if _m
+            lSellMet := true, lCurSellRsn := "LS16a", lSellOff := _o
+    if not lSellMet and enableLS16b
+        [_m, _o] = matchExit3(rsi, ls16bRsiOp, ls16bRsiVal, vfi, ls16bVfiOp, ls16bVfiVal, diPos, ls16bDiOp, ls16bDiVal, signalWindowLong)
+        if _m
+            lSellMet := true, lCurSellRsn := "LS16b", lSellOff := _o
+    if not lSellMet and enableLS16c
+        [_m, _o] = matchExit3(rsi, ls16cRsiOp, ls16cRsiVal, vfi, ls16cVfiOp, ls16cVfiVal, diPos, ls16cDiOp, ls16cDiVal, signalWindowLong)
+        if _m
+            lSellMet := true, lCurSellRsn := "LS16c", lSellOff := _o
+    if not lSellMet and enableLS16d
+        [_m, _o] = matchExit3(rsi, ls16dRsiOp, ls16dRsiVal, vfi, ls16dVfiOp, ls16dVfiVal, diPos, ls16dDiOp, ls16dDiVal, signalWindowLong)
+        if _m
+            lSellMet := true, lCurSellRsn := "LS16d", lSellOff := _o
 
     if lSellMet
         lSellReason := lCurSellRsn
-        lSignalBar  := bar_index
+        lSignalBar  := bar_index - lSellOff
         if usePivotLongExitA or usePivotLongExitB or usePivotLongExitC or usePivotLongExitD
             lPhase := 2 // Ждем окончания окна для пивота
         else
@@ -1370,6 +1438,9 @@ if enableShort and isFirstRedAfterGreen
         sEntrySignal := true
 
 var int sLastExitBar = na
+var int    sEntryPhase       = 0
+var int    sEntrySignalBar   = na
+var string sPendingBuyReason = ""
 sEntryBlocked = false
 if sEntrySignal
     if sbbUseSale and not na(sLastExitBar) and (bar_index - sLastExitBar) <= sbbSaleBars
@@ -1381,8 +1452,8 @@ if sEntrySignal
         if checkRange(0, sbbVfiBars - 1, vfi, sbbVfiOp, sbbVfiVal)
             sEntryBlocked := true
 
-if sEntrySignal and not sEntryBlocked
-    pivotEntryOk = true
+sDoShortEntry = false
+if sEntrySignal and not sEntryBlocked and sEntryPhase == 0
     if usePivotShortEntryA or usePivotShortEntryB or usePivotShortEntryC or usePivotShortEntryD
         [pF, pE, _] = pivotMultiPatternDetector(
              usePivotShortEntryA, pivotShortEntryAFirst, pivotShortEntryASecond,
@@ -1392,30 +1463,52 @@ if sEntrySignal and not sEntryBlocked
              pivotShortEntryWinBack, pivotShortEntryWinFwd, bar_index)
         if pF
             pivotDetectorResult := "Short Entry: " + pE
+            sDoShortEntry := true
         else
-            pivotEntryOk := false
-            
-    if pivotEntryOk
-        // FLIP логика
-        if allowFlip and longIsOpen
-            profitPct = ((close - lEntryPrice) / lEntryPrice * 100)
-            lblColor  = profitPct >= 0 ? color.new(color.green, 10) : color.new(color.red, 10)
-            strategy.close("Long", comment="Закрыт (Flip)")
-            longIsOpen  := false
-            lStopActive := false
-            lPhase      := 0
-            if showLabels
-                label.new(bar_index, low, "ЗАКРЫТИЕ ЛОНГ (Flip)\nP/L: " + str.tostring(profitPct, "#.##") + "%", color=lblColor, textcolor=color.white, style=label.style_label_up, size=size.small)
-        
-        // Открытие
-        if not shortIsOpen
-            strategy.entry("Short", strategy.short)
-            shortIsOpen := true
-            sEntryPrice := close
-            sEntryBar   := bar_index
-            sEntryReason:= sBuyReason
-            if showLabels
-                label.new(bar_index, high, "ШОРТ\n" + sEntryReason, color=color.red, textcolor=color.white, style=label.style_label_down, size=size.normal)
+            sEntryPhase       := 2
+            sEntrySignalBar   := bar_index
+            sPendingBuyReason := sBuyReason
+    else
+        sDoShortEntry := true
+
+if sEntryPhase == 2 and longIsOpen and not allowFlip
+    sEntryPhase := 0
+
+if sEntryPhase == 2
+    if bar_index - sEntrySignalBar == pivotShortEntryWinFwd
+        [pF, pE, _] = pivotMultiPatternDetector(
+             usePivotShortEntryA, pivotShortEntryAFirst, pivotShortEntryASecond,
+             usePivotShortEntryB, pivotShortEntryBFirst, pivotShortEntryBSecond,
+             usePivotShortEntryC, pivotShortEntryCFirst, pivotShortEntryCSecond,
+             usePivotShortEntryD, pivotShortEntryDFirst, pivotShortEntryDSecond,
+             pivotShortEntryWinBack, pivotShortEntryWinFwd, sEntrySignalBar)
+        sEntryPhase := 0
+        if pF
+            pivotDetectorResult := "Short Entry: " + pE
+            sBuyReason    := sPendingBuyReason
+            sDoShortEntry := true
+
+if sDoShortEntry
+    // FLIP логика
+    if allowFlip and longIsOpen
+        profitPct = ((close - lEntryPrice) / lEntryPrice * 100)
+        lblColor  = profitPct >= 0 ? color.new(color.green, 10) : color.new(color.red, 10)
+        strategy.close("Long", comment="Закрыт (Flip)")
+        longIsOpen  := false
+        lStopActive := false
+        lPhase      := 0
+        if showLabels
+            label.new(bar_index, low, "ЗАКРЫТИЕ ЛОНГ (Flip)\nP/L: " + str.tostring(profitPct, "#.##") + "%", color=lblColor, textcolor=color.white, style=label.style_label_up, size=size.small)
+    
+    // Открытие
+    if not shortIsOpen
+        strategy.entry("Short", strategy.short)
+        shortIsOpen := true
+        sEntryPrice := close
+        sEntryBar   := bar_index
+        sEntryReason:= sBuyReason
+        if showLabels
+            label.new(bar_index, high, "ШОРТ\n" + sEntryReason, color=color.red, textcolor=color.white, style=label.style_label_down, size=size.normal)
 
 // ═══════════════════════════════════════════════════════════════════════════
 // ЛОГИКА ЗАКРЫТИЯ ШОРТА
@@ -1443,14 +1536,23 @@ sCloseMet    = false
 sCurCloseRsn = ""
 
 if shortIsOpen and sPhase == 0 and not sStopActive and bar_index > sEntryBar
-    if not sCloseMet and enableSS1 and matchExit2(rsi, ss1RsiOp, ss1RsiVal, vfi, ss1VfiOp, ss1VfiVal, signalWindowShort)
-        sCloseMet := true, sCurCloseRsn := "SS1"
-    if not sCloseMet and enableSS2 and matchExit2(rsi, ss2RsiOp, ss2RsiVal, vfi, ss2VfiOp, ss2VfiVal, signalWindowShort)
-        sCloseMet := true, sCurCloseRsn := "SS2"
-    if not sCloseMet and enableSS3 and matchExit2(rsi, ss3RsiOp, ss3RsiVal, vfi, ss3VfiOp, ss3VfiVal, signalWindowShort)
-        sCloseMet := true, sCurCloseRsn := "SS3"
-    if not sCloseMet and enableSS4 and matchExit2(rsi, ss4RsiOp, ss4RsiVal, vfi, ss4VfiOp, ss4VfiVal, signalWindowShort)
-        sCloseMet := true, sCurCloseRsn := "SS4"
+    sSellOff = 0
+    if not sCloseMet and enableSS1
+        [_m, _o] = matchExit2(rsi, ss1RsiOp, ss1RsiVal, vfi, ss1VfiOp, ss1VfiVal, signalWindowShort)
+        if _m
+            sCloseMet := true, sCurCloseRsn := "SS1", sSellOff := _o
+    if not sCloseMet and enableSS2
+        [_m, _o] = matchExit2(rsi, ss2RsiOp, ss2RsiVal, vfi, ss2VfiOp, ss2VfiVal, signalWindowShort)
+        if _m
+            sCloseMet := true, sCurCloseRsn := "SS2", sSellOff := _o
+    if not sCloseMet and enableSS3
+        [_m, _o] = matchExit2(rsi, ss3RsiOp, ss3RsiVal, vfi, ss3VfiOp, ss3VfiVal, signalWindowShort)
+        if _m
+            sCloseMet := true, sCurCloseRsn := "SS3", sSellOff := _o
+    if not sCloseMet and enableSS4
+        [_m, _o] = matchExit2(rsi, ss4RsiOp, ss4RsiVal, vfi, ss4VfiOp, ss4VfiVal, signalWindowShort)
+        if _m
+            sCloseMet := true, sCurCloseRsn := "SS4", sSellOff := _o
     if not sCloseMet and enableSS5 and matchExit1(rsi, ss5RsiOp, ss5RsiVal)
         sCloseMet := true, sCurCloseRsn := "SS5"
     if not sCloseMet and enableSS6 and matchExit1(rsi, ss6RsiOp, ss6RsiVal)
@@ -1471,34 +1573,58 @@ if shortIsOpen and sPhase == 0 and not sStopActive and bar_index > sEntryBar
         sCloseMet := true, sCurCloseRsn := "SS13a"
     if not sCloseMet and enableSS13b and matchExit1(diPos, ss13bDiOp, ss13bDiVal)
         sCloseMet := true, sCurCloseRsn := "SS13b"
-    if not sCloseMet and enableSS14 and matchExit2(rsi, ss14RsiOp, ss14RsiVal, diPos, ss14DiOp, ss14DiVal, signalWindowShort)
-        sCloseMet := true, sCurCloseRsn := "SS14a"
-    if not sCloseMet and enableSS14b and matchExit2(rsi, ss14bRsiOp, ss14bRsiVal, diPos, ss14bDiOp, ss14bDiVal, signalWindowShort)
-        sCloseMet := true, sCurCloseRsn := "SS14b"
-    if not sCloseMet and enableSS14c and matchExit2(rsi, ss14cRsiOp, ss14cRsiVal, diPos, ss14cDiOp, ss14cDiVal, signalWindowShort)
-        sCloseMet := true, sCurCloseRsn := "SS14c"
-    if not sCloseMet and enableSS14d and matchExit2(rsi, ss14dRsiOp, ss14dRsiVal, diPos, ss14dDiOp, ss14dDiVal, signalWindowShort)
-        sCloseMet := true, sCurCloseRsn := "SS14d"
-    if not sCloseMet and enableSS15 and matchExit2(vfi, ss15VfiOp, ss15VfiVal, diPos, ss15DiOp, ss15DiVal, signalWindowShort)
-        sCloseMet := true, sCurCloseRsn := "SS15a"
-    if not sCloseMet and enableSS15b and matchExit2(vfi, ss15bVfiOp, ss15bVfiVal, diPos, ss15bDiOp, ss15bDiVal, signalWindowShort)
-        sCloseMet := true, sCurCloseRsn := "SS15b"
-    if not sCloseMet and enableSS15c and matchExit2(vfi, ss15cVfiOp, ss15cVfiVal, diPos, ss15cDiOp, ss15cDiVal, signalWindowShort)
-        sCloseMet := true, sCurCloseRsn := "SS15c"
-    if not sCloseMet and enableSS15d and matchExit2(vfi, ss15dVfiOp, ss15dVfiVal, diPos, ss15dDiOp, ss15dDiVal, signalWindowShort)
-        sCloseMet := true, sCurCloseRsn := "SS15d"
-    if not sCloseMet and enableSS16 and matchExit3(rsi, ss16RsiOp, ss16RsiVal, vfi, ss16VfiOp, ss16VfiVal, diPos, ss16DiOp, ss16DiVal, signalWindowShort)
-        sCloseMet := true, sCurCloseRsn := "SS16a"
-    if not sCloseMet and enableSS16b and matchExit3(rsi, ss16bRsiOp, ss16bRsiVal, vfi, ss16bVfiOp, ss16bVfiVal, diPos, ss16bDiOp, ss16bDiVal, signalWindowShort)
-        sCloseMet := true, sCurCloseRsn := "SS16b"
-    if not sCloseMet and enableSS16c and matchExit3(rsi, ss16cRsiOp, ss16cRsiVal, vfi, ss16cVfiOp, ss16cVfiVal, diPos, ss16cDiOp, ss16cDiVal, signalWindowShort)
-        sCloseMet := true, sCurCloseRsn := "SS16c"
-    if not sCloseMet and enableSS16d and matchExit3(rsi, ss16dRsiOp, ss16dRsiVal, vfi, ss16dVfiOp, ss16dVfiVal, diPos, ss16dDiOp, ss16dDiVal, signalWindowShort)
-        sCloseMet := true, sCurCloseRsn := "SS16d"
+    if not sCloseMet and enableSS14
+        [_m, _o] = matchExit2(rsi, ss14RsiOp, ss14RsiVal, diPos, ss14DiOp, ss14DiVal, signalWindowShort)
+        if _m
+            sCloseMet := true, sCurCloseRsn := "SS14a", sSellOff := _o
+    if not sCloseMet and enableSS14b
+        [_m, _o] = matchExit2(rsi, ss14bRsiOp, ss14bRsiVal, diPos, ss14bDiOp, ss14bDiVal, signalWindowShort)
+        if _m
+            sCloseMet := true, sCurCloseRsn := "SS14b", sSellOff := _o
+    if not sCloseMet and enableSS14c
+        [_m, _o] = matchExit2(rsi, ss14cRsiOp, ss14cRsiVal, diPos, ss14cDiOp, ss14cDiVal, signalWindowShort)
+        if _m
+            sCloseMet := true, sCurCloseRsn := "SS14c", sSellOff := _o
+    if not sCloseMet and enableSS14d
+        [_m, _o] = matchExit2(rsi, ss14dRsiOp, ss14dRsiVal, diPos, ss14dDiOp, ss14dDiVal, signalWindowShort)
+        if _m
+            sCloseMet := true, sCurCloseRsn := "SS14d", sSellOff := _o
+    if not sCloseMet and enableSS15
+        [_m, _o] = matchExit2(vfi, ss15VfiOp, ss15VfiVal, diPos, ss15DiOp, ss15DiVal, signalWindowShort)
+        if _m
+            sCloseMet := true, sCurCloseRsn := "SS15a", sSellOff := _o
+    if not sCloseMet and enableSS15b
+        [_m, _o] = matchExit2(vfi, ss15bVfiOp, ss15bVfiVal, diPos, ss15bDiOp, ss15bDiVal, signalWindowShort)
+        if _m
+            sCloseMet := true, sCurCloseRsn := "SS15b", sSellOff := _o
+    if not sCloseMet and enableSS15c
+        [_m, _o] = matchExit2(vfi, ss15cVfiOp, ss15cVfiVal, diPos, ss15cDiOp, ss15cDiVal, signalWindowShort)
+        if _m
+            sCloseMet := true, sCurCloseRsn := "SS15c", sSellOff := _o
+    if not sCloseMet and enableSS15d
+        [_m, _o] = matchExit2(vfi, ss15dVfiOp, ss15dVfiVal, diPos, ss15dDiOp, ss15dDiVal, signalWindowShort)
+        if _m
+            sCloseMet := true, sCurCloseRsn := "SS15d", sSellOff := _o
+    if not sCloseMet and enableSS16
+        [_m, _o] = matchExit3(rsi, ss16RsiOp, ss16RsiVal, vfi, ss16VfiOp, ss16VfiVal, diPos, ss16DiOp, ss16DiVal, signalWindowShort)
+        if _m
+            sCloseMet := true, sCurCloseRsn := "SS16a", sSellOff := _o
+    if not sCloseMet and enableSS16b
+        [_m, _o] = matchExit3(rsi, ss16bRsiOp, ss16bRsiVal, vfi, ss16bVfiOp, ss16bVfiVal, diPos, ss16bDiOp, ss16bDiVal, signalWindowShort)
+        if _m
+            sCloseMet := true, sCurCloseRsn := "SS16b", sSellOff := _o
+    if not sCloseMet and enableSS16c
+        [_m, _o] = matchExit3(rsi, ss16cRsiOp, ss16cRsiVal, vfi, ss16cVfiOp, ss16cVfiVal, diPos, ss16cDiOp, ss16cDiVal, signalWindowShort)
+        if _m
+            sCloseMet := true, sCurCloseRsn := "SS16c", sSellOff := _o
+    if not sCloseMet and enableSS16d
+        [_m, _o] = matchExit3(rsi, ss16dRsiOp, ss16dRsiVal, vfi, ss16dVfiOp, ss16dVfiVal, diPos, ss16dDiOp, ss16dDiVal, signalWindowShort)
+        if _m
+            sCloseMet := true, sCurCloseRsn := "SS16d", sSellOff := _o
 
     if sCloseMet
         sCloseReason := sCurCloseRsn
-        sSignalBar   := bar_index
+        sSignalBar   := bar_index - sSellOff
         if usePivotShortExitA or usePivotShortExitB or usePivotShortExitC or usePivotShortExitD
             sPhase := 2
         else
