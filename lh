@@ -1,0 +1,1610 @@
+// This Pine Script® code is subject to the terms of the Mozilla Public License 2.0 at https://mozilla.org/MPL/2.0/
+//@version=5
+strategy("RSI & VFI Стратегия + ADX + HH/LH [Long+Short]", overlay=true,
+         initial_capital=10000, pyramiding=2,
+         default_qty_type=strategy.percent_of_equity, default_qty_value=100,
+         close_entries_rule="ANY")
+
+// ═══════════════════════════════════════════════════════════════════════════
+// МАСТЕР-ВЫКЛЮЧАТЕЛИ НАПРАВЛЕНИЙ И ГЛОБАЛЬНЫЕ НАСТРОЙКИ
+// ═══════════════════════════════════════════════════════════════════════════
+
+enableLong  = input.bool(true,  "Включить ЛОНГ",  group="Направления")
+enableShort = input.bool(true,  "Включить ШОРТ",  group="Направления")
+allowFlip   = input.bool(true,  "Разрешить переворот позиции (закрыть текущую и открыть противоположную)", group="Направления")
+
+// ═══════════════════════════════════════════════════════════════════════════
+// НАСТРОЙКИ ИНДИКАТОРОВ
+// ═══════════════════════════════════════════════════════════════════════════
+
+// ЖЕСТКО ЗАДАННЫЕ ЗНАЧЕНИЯ (Убраны из настроек)
+rsiPeriod = 14
+vfiLength = 130
+vfiCoef   = 0.2
+vfiVcoef  = 2.5
+
+minRedCandles     = input.int(3, "Мин. красных свечей перед покупкой (Лонг) / зелёных перед продажей (Шорт)", minval=1)
+signalWindowLong  = input.int(5, "Окно поиска сигнала при выходе из Лонга", minval=0)
+signalWindowShort = input.int(5, "Окно поиска сигнала при выходе из Шорта", minval=0)
+sellWindowBars    = input.int(3, "Окно прямой продажи RSI/VFI (LSD/SSD свечей назад)", minval=0)
+
+showTable  = input.bool(true, "Показывать таблицу", group="Отображение")
+showLabels = input.bool(true, "Показывать метки",    group="Отображение")
+
+// ADX Фиксированный период
+adxLen = 14  
+
+// ═══════════════════════════════════════════════════════════════════════════
+// ЧЕТЫРЕ ПИВОТ-ФИЛЬТРА (HH/LH/HL/LL)
+// ═══════════════════════════════════════════════════════════════════════════
+
+// Пивот-фильтр: Закрытие Лонга
+usePivotLongExitA        = input.bool(true,  "Вариант A", group="HH/LH Фильтр: Закрытие Лонга", inline="plxa")
+pivotLongExitAFirst      = input.string("HH", "Первый", options=["HH","LH","HL","LL"], group="HH/LH Фильтр: Закрытие Лонга", inline="plxa")
+pivotLongExitASecond     = input.string("LH", "Второй", options=["HH","LH","HL","LL"], group="HH/LH Фильтр: Закрытие Лонга", inline="plxa")
+
+usePivotLongExitB        = input.bool(false, "Вариант B", group="HH/LH Фильтр: Закрытие Лонга", inline="plxb")
+pivotLongExitBFirst      = input.string("HL", "Первый", options=["HH","LH","HL","LL"], group="HH/LH Фильтр: Закрытие Лонга", inline="plxb")
+pivotLongExitBSecond     = input.string("LL", "Второй", options=["HH","LH","HL","LL"], group="HH/LH Фильтр: Закрытие Лонга", inline="plxb")
+
+usePivotLongExitC        = input.bool(false, "Вариант C", group="HH/LH Фильтр: Закрытие Лонга", inline="plxc")
+pivotLongExitCFirst      = input.string("LL", "Первый", options=["HH","LH","HL","LL"], group="HH/LH Фильтр: Закрытие Лонга", inline="plxc")
+pivotLongExitCSecond     = input.string("HL", "Второй", options=["HH","LH","HL","LL"], group="HH/LH Фильтр: Закрытие Лонга", inline="plxc")
+
+usePivotLongExitD        = input.bool(false, "Вариант D", group="HH/LH Фильтр: Закрытие Лонга", inline="plxd")
+pivotLongExitDFirst      = input.string("HL", "Первый", options=["HH","LH","HL","LL"], group="HH/LH Фильтр: Закрытие Лонга", inline="plxd")
+pivotLongExitDSecond     = input.string("HH", "Второй", options=["HH","LH","HL","LL"], group="HH/LH Фильтр: Закрытие Лонга", inline="plxd")
+
+pivotLongExitWinBack     = input.int(5, "Окно назад (свечей)", minval=0, group="HH/LH Фильтр: Закрытие Лонга", inline="plxw")
+pivotLongExitWinFwd      = input.int(5, "Окно вперёд (свечей)", minval=0, group="HH/LH Фильтр: Закрытие Лонга", inline="plxw")
+
+// Пивот-фильтр: Открытие Лонга
+usePivotLongEntryA       = input.bool(false, "Вариант A", group="HH/LH Фильтр: Открытие Лонга", inline="plea")
+pivotLongEntryAFirst     = input.string("LL", "Первый", options=["HH","LH","HL","LL"], group="HH/LH Фильтр: Открытие Лонга", inline="plea")
+pivotLongEntryASecond    = input.string("HL", "Второй", options=["HH","LH","HL","LL"], group="HH/LH Фильтр: Открытие Лонга", inline="plea")
+
+usePivotLongEntryB       = input.bool(false, "Вариант B", group="HH/LH Фильтр: Открытие Лонга", inline="pleb")
+pivotLongEntryBFirst     = input.string("HL", "Первый", options=["HH","LH","HL","LL"], group="HH/LH Фильтр: Открытие Лонга", inline="pleb")
+pivotLongEntryBSecond    = input.string("HH", "Второй", options=["HH","LH","HL","LL"], group="HH/LH Фильтр: Открытие Лонга", inline="pleb")
+
+usePivotLongEntryC       = input.bool(false, "Вариант C", group="HH/LH Фильтр: Открытие Лонга", inline="plec")
+pivotLongEntryCFirst     = input.string("LL", "Первый", options=["HH","LH","HL","LL"], group="HH/LH Фильтр: Открытие Лонга", inline="plec")
+pivotLongEntryCSecond    = input.string("LL", "Второй", options=["HH","LH","HL","LL"], group="HH/LH Фильтр: Открытие Лонга", inline="plec")
+
+usePivotLongEntryD       = input.bool(false, "Вариант D", group="HH/LH Фильтр: Открытие Лонга", inline="pled")
+pivotLongEntryDFirst     = input.string("HH", "Первый", options=["HH","LH","HL","LL"], group="HH/LH Фильтр: Открытие Лонга", inline="pled")
+pivotLongEntryDSecond    = input.string("LH", "Второй", options=["HH","LH","HL","LL"], group="HH/LH Фильтр: Открытие Лонга", inline="pled")
+
+pivotLongEntryWinBack    = input.int(5, "Окно назад (свечей)", minval=0, group="HH/LH Фильтр: Открытие Лонга", inline="plew")
+pivotLongEntryWinFwd     = input.int(5, "Окно вперёд (свечей)", minval=0, group="HH/LH Фильтр: Открытие Лонга", inline="plew")
+
+// Пивот-фильтр: Закрытие Шорта
+usePivotShortExitA       = input.bool(true,  "Вариант A", group="HH/LH Фильтр: Закрытие Шорта", inline="psxa")
+pivotShortExitAFirst     = input.string("LL", "Первый", options=["HH","LH","HL","LL"], group="HH/LH Фильтр: Закрытие Шорта", inline="psxa")
+pivotShortExitASecond    = input.string("HL", "Второй", options=["HH","LH","HL","LL"], group="HH/LH Фильтр: Закрытие Шорта", inline="psxa")
+
+usePivotShortExitB       = input.bool(false, "Вариант B", group="HH/LH Фильтр: Закрытие Шорта", inline="psxb")
+pivotShortExitBFirst     = input.string("HL", "Первый", options=["HH","LH","HL","LL"], group="HH/LH Фильтр: Закрытие Шорта", inline="psxb")
+pivotShortExitBSecond    = input.string("HH", "Второй", options=["HH","LH","HL","LL"], group="HH/LH Фильтр: Закрытие Шорта", inline="psxb")
+
+usePivotShortExitC       = input.bool(false, "Вариант C", group="HH/LH Фильтр: Закрытие Шорта", inline="psxc")
+pivotShortExitCFirst     = input.string("HH", "Первый", options=["HH","LH","HL","LL"], group="HH/LH Фильтр: Закрытие Шорта", inline="psxc")
+pivotShortExitCSecond    = input.string("HH", "Второй", options=["HH","LH","HL","LL"], group="HH/LH Фильтр: Закрытие Шорта", inline="psxc")
+
+usePivotShortExitD       = input.bool(false, "Вариант D", group="HH/LH Фильтр: Закрытие Шорта", inline="psxd")
+pivotShortExitDFirst     = input.string("LH", "Первый", options=["HH","LH","HL","LL"], group="HH/LH Фильтр: Закрытие Шорта", inline="psxd")
+pivotShortExitDSecond    = input.string("LL", "Второй", options=["HH","LH","HL","LL"], group="HH/LH Фильтр: Закрытие Шорта", inline="psxd")
+
+pivotShortExitWinBack    = input.int(5, "Окно назад (свечей)", minval=0, group="HH/LH Фильтр: Закрытие Шорта", inline="psxw")
+pivotShortExitWinFwd     = input.int(5, "Окно вперёд (свечей)", minval=0, group="HH/LH Фильтр: Закрытие Шорта", inline="psxw")
+
+// Пивот-фильтр: Открытие Шорта
+usePivotShortEntryA      = input.bool(false, "Вариант A", group="HH/LH Фильтр: Открытие Шорта", inline="psea")
+pivotShortEntryAFirst    = input.string("HH", "Первый", options=["HH","LH","HL","LL"], group="HH/LH Фильтр: Открытие Шорта", inline="psea")
+pivotShortEntryASecond   = input.string("LH", "Второй", options=["HH","LH","HL","LL"], group="HH/LH Фильтр: Открытие Шорта", inline="psea")
+
+usePivotShortEntryB      = input.bool(false, "Вариант B", group="HH/LH Фильтр: Открытие Шорта", inline="pseb")
+pivotShortEntryBFirst    = input.string("LH", "Первый", options=["HH","LH","HL","LL"], group="HH/LH Фильтр: Открытие Шорта", inline="pseb")
+pivotShortEntryBSecond   = input.string("LL", "Второй", options=["HH","LH","HL","LL"], group="HH/LH Фильтр: Открытие Шорта", inline="pseb")
+
+usePivotShortEntryC      = input.bool(false, "Вариант C", group="HH/LH Фильтр: Открытие Шорта", inline="psec")
+pivotShortEntryCFirst    = input.string("LL", "Первый", options=["HH","LH","HL","LL"], group="HH/LH Фильтр: Открытие Шорта", inline="psec")
+pivotShortEntryCSecond   = input.string("HL", "Второй", options=["HH","LH","HL","LL"], group="HH/LH Фильтр: Открытие Шорта", inline="psec")
+
+usePivotShortEntryD      = input.bool(false, "Вариант D", group="HH/LH Фильтр: Открытие Шорта", inline="psed")
+pivotShortEntryDFirst    = input.string("HL", "Первый", options=["HH","LH","HL","LL"], group="HH/LH Фильтр: Открытие Шорта", inline="psed")
+pivotShortEntryDSecond   = input.string("HH", "Второй", options=["HH","LH","HL","LL"], group="HH/LH Фильтр: Открытие Шорта", inline="psed")
+
+pivotShortEntryWinBack   = input.int(5, "Окно назад (свечей)", minval=0, group="HH/LH Фильтр: Открытие Шорта", inline="psew")
+pivotShortEntryWinFwd    = input.int(5, "Окно вперёд (свечей)", minval=0, group="HH/LH Фильтр: Открытие Шорта", inline="psew")
+
+// ═══════════════════════════════════════════════════════════════════════════
+// ЛОНГ — НАСТРОЙКИ ВХОДА
+// ═══════════════════════════════════════════════════════════════════════════
+enableLB1  = input.bool(true,  "LB1: RSI+VFI", group="[ЛОНГ] Покупка: RSI+VFI", inline="lb1")
+lb1RsiOp   = input.string("<", "",    options=["<",">"], group="[ЛОНГ] Покупка: RSI+VFI", inline="lb1")
+lb1RsiVal  = input.float(30,  "RSI",                    group="[ЛОНГ] Покупка: RSI+VFI", inline="lb1")
+lb1VfiOp   = input.string(">","VFI",  options=["<",">"], group="[ЛОНГ] Покупка: RSI+VFI", inline="lb1")
+lb1VfiVal  = input.float(10,  "",                       group="[ЛОНГ] Покупка: RSI+VFI", inline="lb1")
+
+enableLB2  = input.bool(true,  "LB2: RSI+VFI", group="[ЛОНГ] Покупка: RSI+VFI", inline="lb2")
+lb2RsiOp   = input.string("<", "",    options=["<",">"], group="[ЛОНГ] Покупка: RSI+VFI", inline="lb2")
+lb2RsiVal  = input.float(25,  "RSI",                    group="[ЛОНГ] Покупка: RSI+VFI", inline="lb2")
+lb2VfiOp   = input.string(">","VFI",  options=["<",">"], group="[ЛОНГ] Покупка: RSI+VFI", inline="lb2")
+lb2VfiVal  = input.float(15,  "",                       group="[ЛОНГ] Покупка: RSI+VFI", inline="lb2")
+
+enableLB3  = input.bool(true,  "LB3: RSI+VFI", group="[ЛОНГ] Покупка: RSI+VFI", inline="lb3")
+lb3RsiOp   = input.string("<", "",    options=["<",">"], group="[ЛОНГ] Покупка: RSI+VFI", inline="lb3")
+lb3RsiVal  = input.float(35,  "RSI",                    group="[ЛОНГ] Покупка: RSI+VFI", inline="lb3")
+lb3VfiOp   = input.string(">","VFI",  options=["<",">"], group="[ЛОНГ] Покупка: RSI+VFI", inline="lb3")
+lb3VfiVal  = input.float(5,   "",                       group="[ЛОНГ] Покупка: RSI+VFI", inline="lb3")
+
+enableLB4  = input.bool(true,  "LB4: RSI+VFI", group="[ЛОНГ] Покупка: RSI+VFI", inline="lb4")
+lb4RsiOp   = input.string(">", "",    options=["<",">"], group="[ЛОНГ] Покупка: RSI+VFI", inline="lb4")
+lb4RsiVal  = input.float(60,  "RSI",                    group="[ЛОНГ] Покупка: RSI+VFI", inline="lb4")
+lb4VfiOp   = input.string(">","VFI",  options=["<",">"], group="[ЛОНГ] Покупка: RSI+VFI", inline="lb4")
+lb4VfiVal  = input.float(10,  "",                       group="[ЛОНГ] Покупка: RSI+VFI", inline="lb4")
+
+enableLB5  = input.bool(true,  "LB5: RSI",  group="[ЛОНГ] Покупка: Только RSI", inline="lb5")
+lb5RsiOp   = input.string("<", "",    options=["<",">"], group="[ЛОНГ] Покупка: Только RSI", inline="lb5")
+lb5RsiVal  = input.float(30,  "RSI",                    group="[ЛОНГ] Покупка: Только RSI", inline="lb5")
+
+enableLB6  = input.bool(true,  "LB6: RSI",  group="[ЛОНГ] Покупка: Только RSI", inline="lb6")
+lb6RsiOp   = input.string("<", "",    options=["<",">"], group="[ЛОНГ] Покупка: Только RSI", inline="lb6")
+lb6RsiVal  = input.float(25,  "RSI",                    group="[ЛОНГ] Покупка: Только RSI", inline="lb6")
+
+enableLB7  = input.bool(true,  "LB7: RSI",  group="[ЛОНГ] Покупка: Только RSI", inline="lb7")
+lb7RsiOp   = input.string("<", "",    options=["<",">"], group="[ЛОНГ] Покупка: Только RSI", inline="lb7")
+lb7RsiVal  = input.float(20,  "RSI",                    group="[ЛОНГ] Покупка: Только RSI", inline="lb7")
+
+enableLB8  = input.bool(true,  "LB8: RSI",  group="[ЛОНГ] Покупка: Только RSI", inline="lb8")
+lb8RsiOp   = input.string(">", "",    options=["<",">"], group="[ЛОНГ] Покупка: Только RSI", inline="lb8")
+lb8RsiVal  = input.float(60,  "RSI",                    group="[ЛОНГ] Покупка: Только RSI", inline="lb8")
+
+enableLB9  = input.bool(true,  "LB9:  VFI", group="[ЛОНГ] Покупка: Только VFI", inline="lb9")
+lb9VfiOp   = input.string(">", "",    options=["<",">"], group="[ЛОНГ] Покупка: Только VFI", inline="lb9")
+lb9VfiVal  = input.float(5,   "VFI",                    group="[ЛОНГ] Покупка: Только VFI", inline="lb9")
+
+enableLB10 = input.bool(true,  "LB10: VFI", group="[ЛОНГ] Покупка: Только VFI", inline="lb10")
+lb10VfiOp  = input.string(">", "",    options=["<",">"], group="[ЛОНГ] Покупка: Только VFI", inline="lb10")
+lb10VfiVal = input.float(10,  "VFI",                    group="[ЛОНГ] Покупка: Только VFI", inline="lb10")
+
+enableLB11 = input.bool(true,  "LB11: VFI", group="[ЛОНГ] Покупка: Только VFI", inline="lb11")
+lb11VfiOp  = input.string("<", "",    options=["<",">"], group="[ЛОНГ] Покупка: Только VFI", inline="lb11")
+lb11VfiVal = input.float(-5,  "VFI",                    group="[ЛОНГ] Покупка: Только VFI", inline="lb11")
+
+enableLB12 = input.bool(true,  "LB12: VFI", group="[ЛОНГ] Покупка: Только VFI", inline="lb12")
+lb12VfiOp  = input.string("<", "",    options=["<",">"], group="[ЛОНГ] Покупка: Только VFI", inline="lb12")
+lb12VfiVal = input.float(-10, "VFI",                    group="[ЛОНГ] Покупка: Только VFI", inline="lb12")
+
+enableLB13  = input.bool(false, "LB13a: DI+",        group="[ЛОНГ] Покупка: С DI+", inline="lb13a")
+lb13AdxOp   = input.string("<", "", options=["<",">"], group="[ЛОНГ] Покупка: С DI+", inline="lb13a")
+lb13AdxVal  = input.float(20,  "DI+",                group="[ЛОНГ] Покупка: С DI+", inline="lb13a")
+
+enableLB13b = input.bool(false, "LB13b: DI+",        group="[ЛОНГ] Покупка: С DI+", inline="lb13b")
+lb13bAdxOp  = input.string(">", "", options=["<",">"], group="[ЛОНГ] Покупка: С DI+", inline="lb13b")
+lb13bAdxVal = input.float(25,  "DI+",                group="[ЛОНГ] Покупка: С DI+", inline="lb13b")
+
+enableLB14  = input.bool(false, "LB14a: RSI+DI+",    group="[ЛОНГ] Покупка: С DI+", inline="lb14a")
+lb14RsiOp   = input.string("<", "", options=["<",">"], group="[ЛОНГ] Покупка: С DI+", inline="lb14a")
+lb14RsiVal  = input.float(30,  "RSI",                group="[ЛОНГ] Покупка: С DI+", inline="lb14a")
+lb14AdxOp   = input.string("<", "DI+", options=["<",">"], group="[ЛОНГ] Покупка: С DI+", inline="lb14a")
+lb14AdxVal  = input.float(20,  "",                   group="[ЛОНГ] Покупка: С DI+", inline="lb14a")
+
+enableLB14b = input.bool(false, "LB14b: RSI+DI+",    group="[ЛОНГ] Покупка: С DI+", inline="lb14b")
+lb14bRsiOp  = input.string("<", "", options=["<",">"], group="[ЛОНГ] Покупка: С DI+", inline="lb14b")
+lb14bRsiVal = input.float(25,  "RSI",                group="[ЛОНГ] Покупка: С DI+", inline="lb14b")
+lb14bAdxOp  = input.string("<", "DI+", options=["<",">"], group="[ЛОНГ] Покупка: С DI+", inline="lb14b")
+lb14bAdxVal = input.float(25,  "",                   group="[ЛОНГ] Покупка: С DI+", inline="lb14b")
+
+enableLB14c = input.bool(false, "LB14c: RSI+DI+",    group="[ЛОНГ] Покупка: С DI+", inline="lb14c")
+lb14cRsiOp  = input.string(">", "", options=["<",">"], group="[ЛОНГ] Покупка: С DI+", inline="lb14c")
+lb14cRsiVal = input.float(60,  "RSI",                group="[ЛОНГ] Покупка: С DI+", inline="lb14c")
+lb14cAdxOp  = input.string(">", "DI+", options=["<",">"], group="[ЛОНГ] Покупка: С DI+", inline="lb14c")
+lb14cAdxVal = input.float(25,  "",                   group="[ЛОНГ] Покупка: С DI+", inline="lb14c")
+
+enableLB14d = input.bool(false, "LB14d: RSI+DI+",    group="[ЛОНГ] Покупка: С DI+", inline="lb14d")
+lb14dRsiOp  = input.string(">", "", options=["<",">"], group="[ЛОНГ] Покупка: С DI+", inline="lb14d")
+lb14dRsiVal = input.float(70,  "RSI",                group="[ЛОНГ] Покупка: С DI+", inline="lb14d")
+lb14dAdxOp  = input.string(">", "DI+", options=["<",">"], group="[ЛОНГ] Покупка: С DI+", inline="lb14d")
+lb14dAdxVal = input.float(30,  "",                   group="[ЛОНГ] Покупка: С DI+", inline="lb14d")
+
+enableLB15  = input.bool(false, "LB15a: VFI+DI+",   group="[ЛОНГ] Покупка: С DI+", inline="lb15a")
+lb15VfiOp   = input.string(">", "", options=["<",">"], group="[ЛОНГ] Покупка: С DI+", inline="lb15a")
+lb15VfiVal  = input.float(5,   "VFI",                group="[ЛОНГ] Покупка: С DI+", inline="lb15a")
+lb15AdxOp   = input.string("<", "DI+", options=["<",">"], group="[ЛОНГ] Покупка: С DI+", inline="lb15a")
+lb15AdxVal  = input.float(20,  "",                   group="[ЛОНГ] Покупка: С DI+", inline="lb15a")
+
+enableLB15b = input.bool(false, "LB15b: VFI+DI+",   group="[ЛОНГ] Покупка: С DI+", inline="lb15b")
+lb15bVfiOp  = input.string(">", "", options=["<",">"], group="[ЛОНГ] Покупка: С DI+", inline="lb15b")
+lb15bVfiVal = input.float(10,  "VFI",                group="[ЛОНГ] Покупка: С DI+", inline="lb15b")
+lb15bAdxOp  = input.string("<", "DI+", options=["<",">"], group="[ЛОНГ] Покупка: С DI+", inline="lb15b")
+lb15bAdxVal = input.float(25,  "",                   group="[ЛОНГ] Покупка: С DI+", inline="lb15b")
+
+enableLB15c = input.bool(false, "LB15c: VFI+DI+",   group="[ЛОНГ] Покупка: С DI+", inline="lb15c")
+lb15cVfiOp  = input.string("<", "", options=["<",">"], group="[ЛОНГ] Покупка: С DI+", inline="lb15c")
+lb15cVfiVal = input.float(-5,  "VFI",                group="[ЛОНГ] Покупка: С DI+", inline="lb15c")
+lb15cAdxOp  = input.string(">", "DI+", options=["<",">"], group="[ЛОНГ] Покупка: С DI+", inline="lb15c")
+lb15cAdxVal = input.float(25,  "",                   group="[ЛОНГ] Покупка: С DI+", inline="lb15c")
+
+enableLB15d = input.bool(false, "LB15d: VFI+DI+",   group="[ЛОНГ] Покупка: С DI+", inline="lb15d")
+lb15dVfiOp  = input.string("<", "", options=["<",">"], group="[ЛОНГ] Покупка: С DI+", inline="lb15d")
+lb15dVfiVal = input.float(-10, "VFI",                group="[ЛОНГ] Покупка: С DI+", inline="lb15d")
+lb15dAdxOp  = input.string(">", "DI+", options=["<",">"], group="[ЛОНГ] Покупка: С DI+", inline="lb15d")
+lb15dAdxVal = input.float(30,  "",                   group="[ЛОНГ] Покупка: С DI+", inline="lb15d")
+
+enableLB16  = input.bool(false, "LB16a: RSI+VFI+DI+", group="[ЛОНГ] Покупка: С DI+", inline="lb16a")
+lb16RsiOp   = input.string("<", "", options=["<",">"], group="[ЛОНГ] Покупка: С DI+", inline="lb16a")
+lb16RsiVal  = input.float(30,  "RSI",                group="[ЛОНГ] Покупка: С DI+", inline="lb16a")
+lb16VfiOp   = input.string(">", "VFI", options=["<",">"], group="[ЛОНГ] Покупка: С DI+", inline="lb16a")
+lb16VfiVal  = input.float(5,   "",                   group="[ЛОНГ] Покупка: С DI+", inline="lb16a")
+lb16AdxOp   = input.string("<", "DI+", options=["<",">"], group="[ЛОНГ] Покупка: С DI+", inline="lb16a")
+lb16AdxVal  = input.float(20,  "",                   group="[ЛОНГ] Покупка: С DI+", inline="lb16a")
+
+enableLB16b = input.bool(false, "LB16b: RSI+VFI+DI+", group="[ЛОНГ] Покупка: С DI+", inline="lb16b")
+lb16bRsiOp  = input.string("<", "", options=["<",">"], group="[ЛОНГ] Покупка: С DI+", inline="lb16b")
+lb16bRsiVal = input.float(25,  "RSI",                group="[ЛОНГ] Покупка: С DI+", inline="lb16b")
+lb16bVfiOp  = input.string(">", "VFI", options=["<",">"], group="[ЛОНГ] Покупка: С DI+", inline="lb16b")
+lb16bVfiVal = input.float(10,  "",                   group="[ЛОНГ] Покупка: С DI+", inline="lb16b")
+lb16bAdxOp  = input.string("<", "DI+", options=["<",">"], group="[ЛОНГ] Покупка: С DI+", inline="lb16b")
+lb16bAdxVal = input.float(25,  "",                   group="[ЛОНГ] Покупка: С DI+", inline="lb16b")
+
+enableLB16c = input.bool(false, "LB16c: RSI+VFI+DI+", group="[ЛОНГ] Покупка: С DI+", inline="lb16c")
+lb16cRsiOp  = input.string(">", "", options=["<",">"], group="[ЛОНГ] Покупка: С DI+", inline="lb16c")
+lb16cRsiVal = input.float(60,  "RSI",                group="[ЛОНГ] Покупка: С DI+", inline="lb16c")
+lb16cVfiOp  = input.string(">", "VFI", options=["<",">"], group="[ЛОНГ] Покупка: С DI+", inline="lb16c")
+lb16cVfiVal = input.float(10,  "",                   group="[ЛОНГ] Покупка: С DI+", inline="lb16c")
+lb16cAdxOp  = input.string(">", "DI+", options=["<",">"], group="[ЛОНГ] Покупка: С DI+", inline="lb16c")
+lb16cAdxVal = input.float(25,  "",                   group="[ЛОНГ] Покупка: С DI+", inline="lb16c")
+
+enableLB16d = input.bool(false, "LB16d: RSI+VFI+DI+", group="[ЛОНГ] Покупка: С DI+", inline="lb16d")
+lb16dRsiOp  = input.string(">", "", options=["<",">"], group="[ЛОНГ] Покупка: С DI+", inline="lb16d")
+lb16dRsiVal = input.float(70,  "RSI",                group="[ЛОНГ] Покупка: С DI+", inline="lb16d")
+lb16dVfiOp  = input.string(">", "VFI", options=["<",">"], group="[ЛОНГ] Покупка: С DI+", inline="lb16d")
+lb16dVfiVal = input.float(15,  "",                   group="[ЛОНГ] Покупка: С DI+", inline="lb16d")
+lb16dAdxOp  = input.string(">", "DI+", options=["<",">"], group="[ЛОНГ] Покупка: С DI+", inline="lb16d")
+lb16dAdxVal = input.float(30,  "",                   group="[ЛОНГ] Покупка: С DI+", inline="lb16d")
+
+// ═══════════════════════════════════════════════════════════════════════════
+// ЛОНГ — НАСТРОЙКИ ПРОДАЖИ
+// ═══════════════════════════════════════════════════════════════════════════
+enableLS1  = input.bool(true,  "LS1: RSI+VFI", group="[ЛОНГ] Продажа: RSI+VFI", inline="ls1")
+ls1RsiOp   = input.string(">", "",    options=["<",">"], group="[ЛОНГ] Продажа: RSI+VFI", inline="ls1")
+ls1RsiVal  = input.float(70,  "RSI",                    group="[ЛОНГ] Продажа: RSI+VFI", inline="ls1")
+ls1VfiOp   = input.string("<","VFI",  options=["<",">"], group="[ЛОНГ] Продажа: RSI+VFI", inline="ls1")
+ls1VfiVal  = input.float(-5,  "",                       group="[ЛОНГ] Продажа: RSI+VFI", inline="ls1")
+
+enableLS2  = input.bool(true,  "LS2: RSI+VFI", group="[ЛОНГ] Продажа: RSI+VFI", inline="ls2")
+ls2RsiOp   = input.string(">", "",    options=["<",">"], group="[ЛОНГ] Продажа: RSI+VFI", inline="ls2")
+ls2RsiVal  = input.float(75,  "RSI",                    group="[ЛОНГ] Продажа: RSI+VFI", inline="ls2")
+ls2VfiOp   = input.string("<","VFI",  options=["<",">"], group="[ЛОНГ] Продажа: RSI+VFI", inline="ls2")
+ls2VfiVal  = input.float(-10, "",                       group="[ЛОНГ] Продажа: RSI+VFI", inline="ls2")
+
+enableLS3  = input.bool(true,  "LS3: RSI+VFI", group="[ЛОНГ] Продажа: RSI+VFI", inline="ls3")
+ls3RsiOp   = input.string("<", "",    options=["<",">"], group="[ЛОНГ] Продажа: RSI+VFI", inline="ls3")
+ls3RsiVal  = input.float(30,  "RSI",                    group="[ЛОНГ] Продажа: RSI+VFI", inline="ls3")
+ls3VfiOp   = input.string(">","VFI",  options=["<",">"], group="[ЛОНГ] Продажа: RSI+VFI", inline="ls3")
+ls3VfiVal  = input.float(10,  "",                       group="[ЛОНГ] Продажа: RSI+VFI", inline="ls3")
+
+enableLS4  = input.bool(true,  "LS4: RSI+VFI", group="[ЛОНГ] Продажа: RSI+VFI", inline="ls4")
+ls4RsiOp   = input.string(">", "",    options=["<",">"], group="[ЛОНГ] Продажа: RSI+VFI", inline="ls4")
+ls4RsiVal  = input.float(65,  "RSI",                    group="[ЛОНГ] Продажа: RSI+VFI", inline="ls4")
+ls4VfiOp   = input.string("<","VFI",  options=["<",">"], group="[ЛОНГ] Продажа: RSI+VFI", inline="ls4")
+ls4VfiVal  = input.float(0,   "",                       group="[ЛОНГ] Продажа: RSI+VFI", inline="ls4")
+
+enableLS5  = input.bool(true,  "LS5: RSI",  group="[ЛОНГ] Продажа: Только RSI", inline="ls5")
+ls5RsiOp   = input.string(">", "",    options=["<",">"], group="[ЛОНГ] Продажа: Только RSI", inline="ls5")
+ls5RsiVal  = input.float(70,  "RSI",                    group="[ЛОНГ] Продажа: Только RSI", inline="ls5")
+
+enableLS6  = input.bool(true,  "LS6: RSI",  group="[ЛОНГ] Продажа: Только RSI", inline="ls6")
+ls6RsiOp   = input.string(">", "",    options=["<",">"], group="[ЛОНГ] Продажа: Только RSI", inline="ls6")
+ls6RsiVal  = input.float(80,  "RSI",                    group="[ЛОНГ] Продажа: Только RSI", inline="ls6")
+
+enableLS7  = input.bool(true,  "LS7: RSI",  group="[ЛОНГ] Продажа: Только RSI", inline="ls7")
+ls7RsiOp   = input.string("<", "",    options=["<",">"], group="[ЛОНГ] Продажа: Только RSI", inline="ls7")
+ls7RsiVal  = input.float(30,  "RSI",                    group="[ЛОНГ] Продажа: Только RSI", inline="ls7")
+
+enableLS8  = input.bool(true,  "LS8: RSI",  group="[ЛОНГ] Продажа: Только RSI", inline="ls8")
+ls8RsiOp   = input.string("<", "",    options=["<",">"], group="[ЛОНГ] Продажа: Только RSI", inline="ls8")
+ls8RsiVal  = input.float(25,  "RSI",                    group="[ЛОНГ] Продажа: Только RSI", inline="ls8")
+
+enableLS9  = input.bool(true,  "LS9:  VFI", group="[ЛОНГ] Продажа: Только VFI", inline="ls9")
+ls9VfiOp   = input.string("<", "",    options=["<",">"], group="[ЛОНГ] Продажа: Только VFI", inline="ls9")
+ls9VfiVal  = input.float(-5,  "VFI",                    group="[ЛОНГ] Продажа: Только VFI", inline="ls9")
+
+enableLS10 = input.bool(true,  "LS10: VFI", group="[ЛОНГ] Продажа: Только VFI", inline="ls10")
+ls10VfiOp  = input.string("<", "",    options=["<",">"], group="[ЛОНГ] Продажа: Только VFI", inline="ls10")
+ls10VfiVal = input.float(-10, "VFI",                    group="[ЛОНГ] Продажа: Только VFI", inline="ls10")
+
+enableLS11 = input.bool(true,  "LS11: VFI", group="[ЛОНГ] Продажа: Только VFI", inline="ls11")
+ls11VfiOp  = input.string(">", "",    options=["<",">"], group="[ЛОНГ] Продажа: Только VFI", inline="ls11")
+ls11VfiVal = input.float(5,   "VFI",                    group="[ЛОНГ] Продажа: Только VFI", inline="ls11")
+
+enableLS12 = input.bool(true,  "LS12: VFI", group="[ЛОНГ] Продажа: Только VFI", inline="ls12")
+ls12VfiOp  = input.string(">", "",    options=["<",">"], group="[ЛОНГ] Продажа: Только VFI", inline="ls12")
+ls12VfiVal = input.float(10,  "VFI",                    group="[ЛОНГ] Продажа: Только VFI", inline="ls12")
+
+enableLS13  = input.bool(false, "LS13a: DI+",        group="[ЛОНГ] Продажа: С DI+", inline="ls13a")
+ls13DiOp    = input.string("<", "", options=["<",">"], group="[ЛОНГ] Продажа: С DI+", inline="ls13a")
+ls13DiVal   = input.float(20,  "DI+",                group="[ЛОНГ] Продажа: С DI+", inline="ls13a")
+
+enableLS13b = input.bool(false, "LS13b: DI+",        group="[ЛОНГ] Продажа: С DI+", inline="ls13b")
+ls13bDiOp   = input.string(">", "", options=["<",">"], group="[ЛОНГ] Продажа: С DI+", inline="ls13b")
+ls13bDiVal  = input.float(25,  "DI+",                group="[ЛОНГ] Продажа: С DI+", inline="ls13b")
+
+enableLS14  = input.bool(false, "LS14a: RSI+DI+",    group="[ЛОНГ] Продажа: С DI+", inline="ls14a")
+ls14RsiOp   = input.string(">", "", options=["<",">"], group="[ЛОНГ] Продажа: С DI+", inline="ls14a")
+ls14RsiVal  = input.float(70,  "RSI",                group="[ЛОНГ] Продажа: С DI+", inline="ls14a")
+ls14DiOp    = input.string("<", "DI+", options=["<",">"], group="[ЛОНГ] Продажа: С DI+", inline="ls14a")
+ls14DiVal   = input.float(20,  "",                   group="[ЛОНГ] Продажа: С DI+", inline="ls14a")
+
+enableLS14b = input.bool(false, "LS14b: RSI+DI+",    group="[ЛОНГ] Продажа: С DI+", inline="ls14b")
+ls14bRsiOp  = input.string(">", "", options=["<",">"], group="[ЛОНГ] Продажа: С DI+", inline="ls14b")
+ls14bRsiVal = input.float(75,  "RSI",                group="[ЛОНГ] Продажа: С DI+", inline="ls14b")
+ls14bDiOp   = input.string("<", "DI+", options=["<",">"], group="[ЛОНГ] Продажа: С DI+", inline="ls14b")
+ls14bDiVal  = input.float(25,  "",                   group="[ЛОНГ] Продажа: С DI+", inline="ls14b")
+
+enableLS14c = input.bool(false, "LS14c: RSI+DI+",    group="[ЛОНГ] Продажа: С DI+", inline="ls14c")
+ls14cRsiOp  = input.string("<", "", options=["<",">"], group="[ЛОНГ] Продажа: С DI+", inline="ls14c")
+ls14cRsiVal = input.float(30,  "RSI",                group="[ЛОНГ] Продажа: С DI+", inline="ls14c")
+ls14cDiOp   = input.string(">", "DI+", options=["<",">"], group="[ЛОНГ] Продажа: С DI+", inline="ls14c")
+ls14cDiVal  = input.float(25,  "",                   group="[ЛОНГ] Продажа: С DI+", inline="ls14c")
+
+enableLS14d = input.bool(false, "LS14d: RSI+DI+",    group="[ЛОНГ] Продажа: С DI+", inline="ls14d")
+ls14dRsiOp  = input.string("<", "", options=["<",">"], group="[ЛОНГ] Продажа: С DI+", inline="ls14d")
+ls14dRsiVal = input.float(25,  "RSI",                group="[ЛОНГ] Продажа: С DI+", inline="ls14d")
+ls14dDiOp   = input.string(">", "DI+", options=["<",">"], group="[ЛОНГ] Продажа: С DI+", inline="ls14d")
+ls14dDiVal  = input.float(30,  "",                   group="[ЛОНГ] Продажа: С DI+", inline="ls14d")
+
+enableLS15  = input.bool(false, "LS15a: VFI+DI+",   group="[ЛОНГ] Продажа: С DI+", inline="ls15a")
+ls15VfiOp   = input.string("<", "", options=["<",">"], group="[ЛОНГ] Продажа: С DI+", inline="ls15a")
+ls15VfiVal  = input.float(-5,  "VFI",                group="[ЛОНГ] Продажа: С DI+", inline="ls15a")
+ls15DiOp    = input.string("<", "DI+", options=["<",">"], group="[ЛОНГ] Продажа: С DI+", inline="ls15a")
+ls15DiVal   = input.float(20,  "",                   group="[ЛОНГ] Продажа: С DI+", inline="ls15a")
+
+enableLS15b = input.bool(false, "LS15b: VFI+DI+",   group="[ЛОНГ] Продажа: С DI+", inline="ls15b")
+ls15bVfiOp  = input.string("<", "", options=["<",">"], group="[ЛОНГ] Продажа: С DI+", inline="ls15b")
+ls15bVfiVal = input.float(-10, "VFI",                group="[ЛОНГ] Продажа: С DI+", inline="ls15b")
+ls15bDiOp   = input.string("<", "DI+", options=["<",">"], group="[ЛОНГ] Продажа: С DI+", inline="ls15b")
+ls15bDiVal  = input.float(25,  "",                   group="[ЛОНГ] Продажа: С DI+", inline="ls15b")
+
+enableLS15c = input.bool(false, "LS15c: VFI+DI+",   group="[ЛОНГ] Продажа: С DI+", inline="ls15c")
+ls15cVfiOp  = input.string(">", "", options=["<",">"], group="[ЛОНГ] Продажа: С DI+", inline="ls15c")
+ls15cVfiVal = input.float(5,   "VFI",                group="[ЛОНГ] Продажа: С DI+", inline="ls15c")
+ls15cDiOp   = input.string(">", "DI+", options=["<",">"], group="[ЛОНГ] Продажа: С DI+", inline="ls15c")
+ls15cDiVal  = input.float(25,  "",                   group="[ЛОНГ] Продажа: С DI+", inline="ls15c")
+
+enableLS15d = input.bool(false, "LS15d: VFI+DI+",   group="[ЛОНГ] Продажа: С DI+", inline="ls15d")
+ls15dVfiOp  = input.string(">", "", options=["<",">"], group="[ЛОНГ] Продажа: С DI+", inline="ls15d")
+ls15dVfiVal = input.float(10,  "VFI",                group="[ЛОНГ] Продажа: С DI+", inline="ls15d")
+ls15dDiOp   = input.string(">", "DI+", options=["<",">"], group="[ЛОНГ] Продажа: С DI+", inline="ls15d")
+ls15dDiVal  = input.float(30,  "",                   group="[ЛОНГ] Продажа: С DI+", inline="ls15d")
+
+enableLS16  = input.bool(false, "LS16a: RSI+VFI+DI+", group="[ЛОНГ] Продажа: С DI+", inline="ls16a")
+ls16RsiOp   = input.string(">", "", options=["<",">"], group="[ЛОНГ] Продажа: С DI+", inline="ls16a")
+ls16RsiVal  = input.float(70,  "RSI",                group="[ЛОНГ] Продажа: С DI+", inline="ls16a")
+ls16VfiOp   = input.string("<", "VFI", options=["<",">"], group="[ЛОНГ] Продажа: С DI+", inline="ls16a")
+ls16VfiVal  = input.float(-5,  "",                   group="[ЛОНГ] Продажа: С DI+", inline="ls16a")
+ls16DiOp    = input.string("<", "DI+", options=["<",">"], group="[ЛОНГ] Продажа: С DI+", inline="ls16a")
+ls16DiVal   = input.float(20,  "",                   group="[ЛОНГ] Продажа: С DI+", inline="ls16a")
+
+enableLS16b = input.bool(false, "LS16b: RSI+VFI+DI+", group="[ЛОНГ] Продажа: С DI+", inline="ls16b")
+ls16bRsiOp  = input.string(">", "", options=["<",">"], group="[ЛОНГ] Продажа: С DI+", inline="ls16b")
+ls16bRsiVal = input.float(75,  "RSI",                group="[ЛОНГ] Продажа: С DI+", inline="ls16b")
+ls16bVfiOp  = input.string("<", "VFI", options=["<",">"], group="[ЛОНГ] Продажа: С DI+", inline="ls16b")
+ls16bVfiVal = input.float(-10, "",                   group="[ЛОНГ] Продажа: С DI+", inline="ls16b")
+ls16bDiOp   = input.string("<", "DI+", options=["<",">"], group="[ЛОНГ] Продажа: С DI+", inline="ls16b")
+ls16bDiVal  = input.float(25,  "",                   group="[ЛОНГ] Продажа: С DI+", inline="ls16b")
+
+enableLS16c = input.bool(false, "LS16c: RSI+VFI+DI+", group="[ЛОНГ] Продажа: С DI+", inline="ls16c")
+ls16cRsiOp  = input.string("<", "", options=["<",">"], group="[ЛОНГ] Продажа: С DI+", inline="ls16c")
+ls16cRsiVal = input.float(30,  "RSI",                group="[ЛОНГ] Продажа: С DI+", inline="ls16c")
+ls16cVfiOp  = input.string(">", "VFI", options=["<",">"], group="[ЛОНГ] Продажа: С DI+", inline="ls16c")
+ls16cVfiVal = input.float(5,   "",                   group="[ЛОНГ] Продажа: С DI+", inline="ls16c")
+ls16cDiOp   = input.string(">", "DI+", options=["<",">"], group="[ЛОНГ] Продажа: С DI+", inline="ls16c")
+ls16cDiVal  = input.float(25,  "",                   group="[ЛОНГ] Продажа: С DI+", inline="ls16c")
+
+enableLS16d = input.bool(false, "LS16d: RSI+VFI+DI+", group="[ЛОНГ] Продажа: С DI+", inline="ls16d")
+ls16dRsiOp  = input.string("<", "", options=["<",">"], group="[ЛОНГ] Продажа: С DI+", inline="ls16d")
+ls16dRsiVal = input.float(25,  "RSI",                group="[ЛОНГ] Продажа: С DI+", inline="ls16d")
+ls16dVfiOp  = input.string(">", "VFI", options=["<",">"], group="[ЛОНГ] Продажа: С DI+", inline="ls16d")
+ls16dVfiVal = input.float(10,  "",                   group="[ЛОНГ] Продажа: С DI+", inline="ls16d")
+ls16dDiOp   = input.string(">", "DI+", options=["<",">"], group="[ЛОНГ] Продажа: С DI+", inline="ls16d")
+ls16dDiVal  = input.float(30,  "",                   group="[ЛОНГ] Продажа: С DI+", inline="ls16d")
+
+enableLSD1 = input.bool(false, "LSD1: RSI",         group="[ЛОНГ] Прямая продажа (без фильтров)", inline="lsd1")
+lsd1RsiOp  = input.string(">", "", options=["<",">"], group="[ЛОНГ] Прямая продажа (без фильтров)", inline="lsd1")
+lsd1RsiVal = input.float(70,  "RSI",                group="[ЛОНГ] Прямая продажа (без фильтров)", inline="lsd1")
+
+enableLSD2 = input.bool(false, "LSD2: VFI",         group="[ЛОНГ] Прямая продажа (без фильтров)", inline="lsd2")
+lsd2VfiOp  = input.string("<", "", options=["<",">"], group="[ЛОНГ] Прямая продажа (без фильтров)", inline="lsd2")
+lsd2VfiVal = input.float(-5,  "VFI",                group="[ЛОНГ] Прямая продажа (без фильтров)", inline="lsd2")
+
+enableLSD3 = input.bool(false, "LSD3: DI+",         group="[ЛОНГ] Прямая продажа (без фильтров)", inline="lsd3")
+lsd3DiOp   = input.string("<", "", options=["<",">"], group="[ЛОНГ] Прямая продажа (без фильтров)", inline="lsd3")
+lsd3DiVal  = input.float(20,  "DI+",                group="[ЛОНГ] Прямая продажа (без фильтров)", inline="lsd3")
+
+lbbUseSale  = input.bool(false, "Блок если была продажа за N свечей",  group="[ЛОНГ] Фильтр блокировки покупки")
+lbbSaleBars = input.int(10,     "Кол-во свечей назад для продажи",     group="[ЛОНГ] Фильтр блокировки покупки", minval=1)
+lbbUseRsi   = input.bool(false, "Блок если RSI был экстремальным",     group="[ЛОНГ] Фильтр блокировки покупки", inline="lbbrsi")
+lbbRsiOp    = input.string(">", "", options=["<",">"],                  group="[ЛОНГ] Фильтр блокировки покупки", inline="lbbrsi")
+lbbRsiVal   = input.float(80,   "RSI за N свечей назад",               group="[ЛОНГ] Фильтр блокировки покупки", inline="lbbrsi")
+lbbRsiBars  = input.int(10,     "",                                     group="[ЛОНГ] Фильтр блокировки покупки", inline="lbbrsi", minval=1)
+lbbUseVfi   = input.bool(false, "Блок если VFI был экстремальным",     group="[ЛОНГ] Фильтр блокировки покупки", inline="lbbvfi")
+lbbVfiOp    = input.string("<", "", options=["<",">"],                  group="[ЛОНГ] Фильтр блокировки покупки", inline="lbbvfi")
+lbbVfiVal   = input.float(-20,  "VFI за N свечей назад",               group="[ЛОНГ] Фильтр блокировки покупки", inline="lbbvfi")
+lbbVfiBars  = input.int(10,     "",                                     group="[ЛОНГ] Фильтр блокировки покупки", inline="lbbvfi", minval=1)
+
+// ═══════════════════════════════════════════════════════════════════════════
+// ШОРТ — НАСТРОЙКИ ВХОДА
+// ═══════════════════════════════════════════════════════════════════════════
+enableSB1  = input.bool(true,  "SB1: RSI+VFI", group="[ШОРТ] Вход: RSI+VFI", inline="sb1")
+sb1RsiOp   = input.string(">", "",    options=["<",">"], group="[ШОРТ] Вход: RSI+VFI", inline="sb1")
+sb1RsiVal  = input.float(70,  "RSI",                    group="[ШОРТ] Вход: RSI+VFI", inline="sb1")
+sb1VfiOp   = input.string("<","VFI",  options=["<",">"], group="[ШОРТ] Вход: RSI+VFI", inline="sb1")
+sb1VfiVal  = input.float(-10, "",                       group="[ШОРТ] Вход: RSI+VFI", inline="sb1")
+
+enableSB2  = input.bool(true,  "SB2: RSI+VFI", group="[ШОРТ] Вход: RSI+VFI", inline="sb2")
+sb2RsiOp   = input.string(">", "",    options=["<",">"], group="[ШОРТ] Вход: RSI+VFI", inline="sb2")
+sb2RsiVal  = input.float(75,  "RSI",                    group="[ШОРТ] Вход: RSI+VFI", inline="sb2")
+sb2VfiOp   = input.string("<","VFI",  options=["<",">"], group="[ШОРТ] Вход: RSI+VFI", inline="sb2")
+sb2VfiVal  = input.float(-15, "",                       group="[ШОРТ] Вход: RSI+VFI", inline="sb2")
+
+enableSB3  = input.bool(true,  "SB3: RSI+VFI", group="[ШОРТ] Вход: RSI+VFI", inline="sb3")
+sb3RsiOp   = input.string(">", "",    options=["<",">"], group="[ШОРТ] Вход: RSI+VFI", inline="sb3")
+sb3RsiVal  = input.float(65,  "RSI",                    group="[ШОРТ] Вход: RSI+VFI", inline="sb3")
+sb3VfiOp   = input.string("<","VFI",  options=["<",">"], group="[ШОРТ] Вход: RSI+VFI", inline="sb3")
+sb3VfiVal  = input.float(-5,  "",                       group="[ШОРТ] Вход: RSI+VFI", inline="sb3")
+
+enableSB4  = input.bool(true,  "SB4: RSI+VFI", group="[ШОРТ] Вход: RSI+VFI", inline="sb4")
+sb4RsiOp   = input.string("<", "",    options=["<",">"], group="[ШОРТ] Вход: RSI+VFI", inline="sb4")
+sb4RsiVal  = input.float(40,  "RSI",                    group="[ШОРТ] Вход: RSI+VFI", inline="sb4")
+sb4VfiOp   = input.string("<","VFI",  options=["<",">"], group="[ШОРТ] Вход: RSI+VFI", inline="sb4")
+sb4VfiVal  = input.float(-10, "",                       group="[ШОРТ] Вход: RSI+VFI", inline="sb4")
+
+enableSB5  = input.bool(true,  "SB5: RSI",  group="[ШОРТ] Вход: Только RSI", inline="sb5")
+sb5RsiOp   = input.string(">", "",    options=["<",">"], group="[ШОРТ] Вход: Только RSI", inline="sb5")
+sb5RsiVal  = input.float(70,  "RSI",                    group="[ШОРТ] Вход: Только RSI", inline="sb5")
+
+enableSB6  = input.bool(true,  "SB6: RSI",  group="[ШОРТ] Вход: Только RSI", inline="sb6")
+sb6RsiOp   = input.string(">", "",    options=["<",">"], group="[ШОРТ] Вход: Только RSI", inline="sb6")
+sb6RsiVal  = input.float(75,  "RSI",                    group="[ШОРТ] Вход: Только RSI", inline="sb6")
+
+enableSB7  = input.bool(true,  "SB7: RSI",  group="[ШОРТ] Вход: Только RSI", inline="sb7")
+sb7RsiOp   = input.string(">", "",    options=["<",">"], group="[ШОРТ] Вход: Только RSI", inline="sb7")
+sb7RsiVal  = input.float(80,  "RSI",                    group="[ШОРТ] Вход: Только RSI", inline="sb7")
+
+enableSB8  = input.bool(true,  "SB8: RSI",  group="[ШОРТ] Вход: Только RSI", inline="sb8")
+sb8RsiOp   = input.string("<", "",    options=["<",">"], group="[ШОРТ] Вход: Только RSI", inline="sb8")
+sb8RsiVal  = input.float(40,  "RSI",                    group="[ШОРТ] Вход: Только RSI", inline="sb8")
+
+enableSB9  = input.bool(true,  "SB9:  VFI", group="[ШОРТ] Вход: Только VFI", inline="sb9")
+sb9VfiOp   = input.string("<", "",    options=["<",">"], group="[ШОРТ] Вход: Только VFI", inline="sb9")
+sb9VfiVal  = input.float(-5,  "VFI",                    group="[ШОРТ] Вход: Только VFI", inline="sb9")
+
+enableSB10 = input.bool(true,  "SB10: VFI", group="[ШОРТ] Вход: Только VFI", inline="sb10")
+sb10VfiOp  = input.string("<", "",    options=["<",">"], group="[ШОРТ] Вход: Только VFI", inline="sb10")
+sb10VfiVal = input.float(-10, "VFI",                    group="[ШОРТ] Вход: Только VFI", inline="sb10")
+
+enableSB11 = input.bool(true,  "SB11: VFI", group="[ШОРТ] Вход: Только VFI", inline="sb11")
+sb11VfiOp  = input.string(">", "",    options=["<",">"], group="[ШОРТ] Вход: Только VFI", inline="sb11")
+sb11VfiVal = input.float(5,   "VFI",                    group="[ШОРТ] Вход: Только VFI", inline="sb11")
+
+enableSB12 = input.bool(true,  "SB12: VFI", group="[ШОРТ] Вход: Только VFI", inline="sb12")
+sb12VfiOp  = input.string(">", "",    options=["<",">"], group="[ШОРТ] Вход: Только VFI", inline="sb12")
+sb12VfiVal = input.float(10,  "VFI",                    group="[ШОРТ] Вход: Только VFI", inline="sb12")
+
+enableSB13  = input.bool(false, "SB13a: DI+",        group="[ШОРТ] Вход: С DI+", inline="sb13a")
+sb13AdxOp   = input.string(">", "", options=["<",">"], group="[ШОРТ] Вход: С DI+", inline="sb13a")
+sb13AdxVal  = input.float(25,  "DI+",                group="[ШОРТ] Вход: С DI+", inline="sb13a")
+
+enableSB13b = input.bool(false, "SB13b: DI+",        group="[ШОРТ] Вход: С DI+", inline="sb13b")
+sb13bAdxOp  = input.string("<", "", options=["<",">"], group="[ШОРТ] Вход: С DI+", inline="sb13b")
+sb13bAdxVal = input.float(20,  "DI+",                group="[ШОРТ] Вход: С DI+", inline="sb13b")
+
+enableSB14  = input.bool(false, "SB14a: RSI+DI+",    group="[ШОРТ] Вход: С DI+", inline="sb14a")
+sb14RsiOp   = input.string(">", "", options=["<",">"], group="[ШОРТ] Вход: С DI+", inline="sb14a")
+sb14RsiVal  = input.float(70,  "RSI",                group="[ШОРТ] Вход: С DI+", inline="sb14a")
+sb14AdxOp   = input.string(">", "DI+", options=["<",">"], group="[ШОРТ] Вход: С DI+", inline="sb14a")
+sb14AdxVal  = input.float(25,  "",                   group="[ШОРТ] Вход: С DI+", inline="sb14a")
+
+enableSB14b = input.bool(false, "SB14b: RSI+DI+",    group="[ШОРТ] Вход: С DI+", inline="sb14b")
+sb14bRsiOp  = input.string(">", "", options=["<",">"], group="[ШОРТ] Вход: С DI+", inline="sb14b")
+sb14bRsiVal = input.float(75,  "RSI",                group="[ШОРТ] Вход: С DI+", inline="sb14b")
+sb14bAdxOp  = input.string(">", "DI+", options=["<",">"], group="[ШОРТ] Вход: С DI+", inline="sb14b")
+sb14bAdxVal = input.float(30,  "",                   group="[ШОРТ] Вход: С DI+", inline="sb14b")
+
+enableSB14c = input.bool(false, "SB14c: RSI+DI+",    group="[ШОРТ] Вход: С DI+", inline="sb14c")
+sb14cRsiOp  = input.string("<", "", options=["<",">"], group="[ШОРТ] Вход: С DI+", inline="sb14c")
+sb14cRsiVal = input.float(40,  "RSI",                group="[ШОРТ] Вход: С DI+", inline="sb14c")
+sb14cAdxOp  = input.string("<", "DI+", options=["<",">"], group="[ШОРТ] Вход: С DI+", inline="sb14c")
+sb14cAdxVal = input.float(20,  "",                   group="[ШОРТ] Вход: С DI+", inline="sb14c")
+
+enableSB14d = input.bool(false, "SB14d: RSI+DI+",    group="[ШОРТ] Вход: С DI+", inline="sb14d")
+sb14dRsiOp  = input.string("<", "", options=["<",">"], group="[ШОРТ] Вход: С DI+", inline="sb14d")
+sb14dRsiVal = input.float(35,  "RSI",                group="[ШОРТ] Вход: С DI+", inline="sb14d")
+sb14dAdxOp  = input.string("<", "DI+", options=["<",">"], group="[ШОРТ] Вход: С DI+", inline="sb14d")
+sb14dAdxVal = input.float(25,  "",                   group="[ШОРТ] Вход: С DI+", inline="sb14d")
+
+enableSB15  = input.bool(false, "SB15a: VFI+DI+",   group="[ШОРТ] Вход: С DI+", inline="sb15a")
+sb15VfiOp   = input.string("<", "", options=["<",">"], group="[ШОРТ] Вход: С DI+", inline="sb15a")
+sb15VfiVal  = input.float(-5,  "VFI",                group="[ШОРТ] Вход: С DI+", inline="sb15a")
+sb15AdxOp   = input.string(">", "DI+", options=["<",">"], group="[ШОРТ] Вход: С DI+", inline="sb15a")
+sb15AdxVal  = input.float(25,  "",                   group="[ШОРТ] Вход: С DI+", inline="sb15a")
+
+enableSB15b = input.bool(false, "SB15b: VFI+DI+",   group="[ШОРТ] Вход: С DI+", inline="sb15b")
+sb15bVfiOp  = input.string("<", "", options=["<",">"], group="[ШОРТ] Вход: С DI+", inline="sb15b")
+sb15bVfiVal = input.float(-10, "VFI",                group="[ШОРТ] Вход: С DI+", inline="sb15b")
+sb15bAdxOp  = input.string(">", "DI+", options=["<",">"], group="[ШОРТ] Вход: С DI+", inline="sb15b")
+sb15bAdxVal = input.float(30,  "",                   group="[ШОРТ] Вход: С DI+", inline="sb15b")
+
+enableSB15c = input.bool(false, "SB15c: VFI+DI+",   group="[ШОРТ] Вход: С DI+", inline="sb15c")
+sb15cVfiOp  = input.string(">", "", options=["<",">"], group="[ШОРТ] Вход: С DI+", inline="sb15c")
+sb15cVfiVal = input.float(5,   "VFI",                group="[ШОРТ] Вход: С DI+", inline="sb15c")
+sb15cAdxOp  = input.string("<", "DI+", options=["<",">"], group="[ШОРТ] Вход: С DI+", inline="sb15c")
+sb15cAdxVal = input.float(20,  "",                   group="[ШОРТ] Вход: С DI+", inline="sb15c")
+
+enableSB15d = input.bool(false, "SB15d: VFI+DI+",   group="[ШОРТ] Вход: С DI+", inline="sb15d")
+sb15dVfiOp  = input.string(">", "", options=["<",">"], group="[ШОРТ] Вход: С DI+", inline="sb15d")
+sb15dVfiVal = input.float(10,  "VFI",                group="[ШОРТ] Вход: С DI+", inline="sb15d")
+sb15dAdxOp  = input.string("<", "DI+", options=["<",">"], group="[ШОРТ] Вход: С DI+", inline="sb15d")
+sb15dAdxVal = input.float(25,  "",                   group="[ШОРТ] Вход: С DI+", inline="sb15d")
+
+enableSB16  = input.bool(false, "SB16a: RSI+VFI+DI+", group="[ШОРТ] Вход: С DI+", inline="sb16a")
+sb16RsiOp   = input.string(">", "", options=["<",">"], group="[ШОРТ] Вход: С DI+", inline="sb16a")
+sb16RsiVal  = input.float(70,  "RSI",                group="[ШОРТ] Вход: С DI+", inline="sb16a")
+sb16VfiOp   = input.string("<", "VFI", options=["<",">"], group="[ШОРТ] Вход: С DI+", inline="sb16a")
+sb16VfiVal  = input.float(-5,  "",                   group="[ШОРТ] Вход: С DI+", inline="sb16a")
+sb16AdxOp   = input.string(">", "DI+", options=["<",">"], group="[ШОРТ] Вход: С DI+", inline="sb16a")
+sb16AdxVal  = input.float(25,  "",                   group="[ШОРТ] Вход: С DI+", inline="sb16a")
+
+enableSB16b = input.bool(false, "SB16b: RSI+VFI+DI+", group="[ШОРТ] Вход: С DI+", inline="sb16b")
+sb16bRsiOp  = input.string(">", "", options=["<",">"], group="[ШОРТ] Вход: С DI+", inline="sb16b")
+sb16bRsiVal = input.float(75,  "RSI",                group="[ШОРТ] Вход: С DI+", inline="sb16b")
+sb16bVfiOp  = input.string("<", "VFI", options=["<",">"], group="[ШОРТ] Вход: С DI+", inline="sb16b")
+sb16bVfiVal = input.float(-10, "",                   group="[ШОРТ] Вход: С DI+", inline="sb16b")
+sb16bAdxOp  = input.string(">", "DI+", options=["<",">"], group="[ШОРТ] Вход: С DI+", inline="sb16b")
+sb16bAdxVal = input.float(30,  "",                   group="[ШОРТ] Вход: С DI+", inline="sb16b")
+
+enableSB16c = input.bool(false, "SB16c: RSI+VFI+DI+", group="[ШОРТ] Вход: С DI+", inline="sb16c")
+sb16cRsiOp  = input.string("<", "", options=["<",">"], group="[ШОРТ] Вход: С DI+", inline="sb16c")
+sb16cRsiVal = input.float(40,  "RSI",                group="[ШОРТ] Вход: С DI+", inline="sb16c")
+sb16cVfiOp  = input.string(">", "VFI", options=["<",">"], group="[ШОРТ] Вход: С DI+", inline="sb16c")
+sb16cVfiVal = input.float(5,   "",                   group="[ШОРТ] Вход: С DI+", inline="sb16c")
+sb16cAdxOp  = input.string("<", "DI+", options=["<",">"], group="[ШОРТ] Вход: С DI+", inline="sb16c")
+sb16cAdxVal = input.float(20,  "",                   group="[ШОРТ] Вход: С DI+", inline="sb16c")
+
+enableSB16d = input.bool(false, "SB16d: RSI+VFI+DI+", group="[ШОРТ] Вход: С DI+", inline="sb16d")
+sb16dRsiOp  = input.string("<", "", options=["<",">"], group="[ШОРТ] Вход: С DI+", inline="sb16d")
+sb16dRsiVal = input.float(35,  "RSI",                group="[ШОРТ] Вход: С DI+", inline="sb16d")
+sb16dVfiOp  = input.string(">", "VFI", options=["<",">"], group="[ШОРТ] Вход: С DI+", inline="sb16d")
+sb16dVfiVal = input.float(10,  "",                   group="[ШОРТ] Вход: С DI+", inline="sb16d")
+sb16dAdxOp  = input.string("<", "DI+", options=["<",">"], group="[ШОРТ] Вход: С DI+", inline="sb16d")
+sb16dAdxVal = input.float(25,  "",                   group="[ШОРТ] Вход: С DI+", inline="sb16d")
+
+// ═══════════════════════════════════════════════════════════════════════════
+// ШОРТ — НАСТРОЙКИ ЗАКРЫТИЯ
+// ═══════════════════════════════════════════════════════════════════════════
+enableSS1  = input.bool(true,  "SS1: RSI+VFI", group="[ШОРТ] Закрытие: RSI+VFI", inline="ss1")
+ss1RsiOp   = input.string("<", "",    options=["<",">"], group="[ШОРТ] Закрытие: RSI+VFI", inline="ss1")
+ss1RsiVal  = input.float(30,  "RSI",                    group="[ШОРТ] Закрытие: RSI+VFI", inline="ss1")
+ss1VfiOp   = input.string(">","VFI",  options=["<",">"], group="[ШОРТ] Закрытие: RSI+VFI", inline="ss1")
+ss1VfiVal  = input.float(5,   "",                       group="[ШОРТ] Закрытие: RSI+VFI", inline="ss1")
+
+enableSS2  = input.bool(true,  "SS2: RSI+VFI", group="[ШОРТ] Закрытие: RSI+VFI", inline="ss2")
+ss2RsiOp   = input.string("<", "",    options=["<",">"], group="[ШОРТ] Закрытие: RSI+VFI", inline="ss2")
+ss2RsiVal  = input.float(25,  "RSI",                    group="[ШОРТ] Закрытие: RSI+VFI", inline="ss2")
+ss2VfiOp   = input.string(">","VFI",  options=["<",">"], group="[ШОРТ] Закрытие: RSI+VFI", inline="ss2")
+ss2VfiVal  = input.float(10,  "",                       group="[ШОРТ] Закрытие: RSI+VFI", inline="ss2")
+
+enableSS3  = input.bool(true,  "SS3: RSI+VFI", group="[ШОРТ] Закрытие: RSI+VFI", inline="ss3")
+ss3RsiOp   = input.string(">", "",    options=["<",">"], group="[ШОРТ] Закрытие: RSI+VFI", inline="ss3")
+ss3RsiVal  = input.float(70,  "RSI",                    group="[ШОРТ] Закрытие: RSI+VFI", inline="ss3")
+ss3VfiOp   = input.string("<","VFI",  options=["<",">"], group="[ШОРТ] Закрытие: RSI+VFI", inline="ss3")
+ss3VfiVal  = input.float(-10, "",                       group="[ШОРТ] Закрытие: RSI+VFI", inline="ss3")
+
+enableSS4  = input.bool(true,  "SS4: RSI+VFI", group="[ШОРТ] Закрытие: RSI+VFI", inline="ss4")
+ss4RsiOp   = input.string("<", "",    options=["<",">"], group="[ШОРТ] Закрытие: RSI+VFI", inline="ss4")
+ss4RsiVal  = input.float(35,  "RSI",                    group="[ШОРТ] Закрытие: RSI+VFI", inline="ss4")
+ss4VfiOp   = input.string(">","VFI",  options=["<",">"], group="[ШОРТ] Закрытие: RSI+VFI", inline="ss4")
+ss4VfiVal  = input.float(0,   "",                       group="[ШОРТ] Закрытие: RSI+VFI", inline="ss4")
+
+enableSS5  = input.bool(true,  "SS5: RSI",  group="[ШОРТ] Закрытие: Только RSI", inline="ss5")
+ss5RsiOp   = input.string("<", "",    options=["<",">"], group="[ШОРТ] Закрытие: Только RSI", inline="ss5")
+ss5RsiVal  = input.float(30,  "RSI",                    group="[ШОРТ] Закрытие: Только RSI", inline="ss5")
+
+enableSS6  = input.bool(true,  "SS6: RSI",  group="[ШОРТ] Закрытие: Только RSI", inline="ss6")
+ss6RsiOp   = input.string("<", "",    options=["<",">"], group="[ШОРТ] Закрытие: Только RSI", inline="ss6")
+ss6RsiVal  = input.float(20,  "RSI",                    group="[ШОРТ] Закрытие: Только RSI", inline="ss6")
+
+enableSS7  = input.bool(true,  "SS7: RSI",  group="[ШОРТ] Закрытие: Только RSI", inline="ss7")
+ss7RsiOp   = input.string(">", "",    options=["<",">"], group="[ШОРТ] Закрытие: Только RSI", inline="ss7")
+ss7RsiVal  = input.float(70,  "RSI",                    group="[ШОРТ] Закрытие: Только RSI", inline="ss7")
+
+enableSS8  = input.bool(true,  "SS8: RSI",  group="[ШОРТ] Закрытие: Только RSI", inline="ss8")
+ss8RsiOp   = input.string(">", "",    options=["<",">"], group="[ШОРТ] Закрытие: Только RSI", inline="ss8")
+ss8RsiVal  = input.float(75,  "RSI",                    group="[ШОРТ] Закрытие: Только RSI", inline="ss8")
+
+enableSS9  = input.bool(true,  "SS9:  VFI", group="[ШОРТ] Закрытие: Только VFI", inline="ss9")
+ss9VfiOp   = input.string(">", "",    options=["<",">"], group="[ШОРТ] Закрытие: Только VFI", inline="ss9")
+ss9VfiVal  = input.float(5,   "VFI",                    group="[ШОРТ] Закрытие: Только VFI", inline="ss9")
+
+enableSS10 = input.bool(true,  "SS10: VFI", group="[ШОРТ] Закрытие: Только VFI", inline="ss10")
+ss10VfiOp  = input.string(">", "",    options=["<",">"], group="[ШОРТ] Закрытие: Только VFI", inline="ss10")
+ss10VfiVal = input.float(10,  "VFI",                    group="[ШОРТ] Закрытие: Только VFI", inline="ss10")
+
+enableSS11 = input.bool(true,  "SS11: VFI", group="[ШОРТ] Закрытие: Только VFI", inline="ss11")
+ss11VfiOp  = input.string("<", "",    options=["<",">"], group="[ШОРТ] Закрытие: Только VFI", inline="ss11")
+ss11VfiVal = input.float(-5,  "VFI",                    group="[ШОРТ] Закрытие: Только VFI", inline="ss11")
+
+enableSS12 = input.bool(true,  "SS12: VFI", group="[ШОРТ] Закрытие: Только VFI", inline="ss12")
+ss12VfiOp  = input.string("<", "",    options=["<",">"], group="[ШОРТ] Закрытие: Только VFI", inline="ss12")
+ss12VfiVal = input.float(-10, "VFI",                    group="[ШОРТ] Закрытие: Только VFI", inline="ss12")
+
+enableSS13  = input.bool(false, "SS13a: DI+",        group="[ШОРТ] Закрытие: С DI+", inline="ss13a")
+ss13DiOp    = input.string(">", "", options=["<",">"], group="[ШОРТ] Закрытие: С DI+", inline="ss13a")
+ss13DiVal   = input.float(25,  "DI+",                group="[ШОРТ] Закрытие: С DI+", inline="ss13a")
+
+enableSS13b = input.bool(false, "SS13b: DI+",        group="[ШОРТ] Закрытие: С DI+", inline="ss13b")
+ss13bDiOp   = input.string("<", "", options=["<",">"], group="[ШОРТ] Закрытие: С DI+", inline="ss13b")
+ss13bDiVal  = input.float(20,  "DI+",                group="[ШОРТ] Закрытие: С DI+", inline="ss13b")
+
+enableSS14  = input.bool(false, "SS14a: RSI+DI+",    group="[ШОРТ] Закрытие: С DI+", inline="ss14a")
+ss14RsiOp   = input.string("<", "", options=["<",">"], group="[ШОРТ] Закрытие: С DI+", inline="ss14a")
+ss14RsiVal  = input.float(30,  "RSI",                group="[ШОРТ] Закрытие: С DI+", inline="ss14a")
+ss14DiOp    = input.string(">", "DI+", options=["<",">"], group="[ШОРТ] Закрытие: С DI+", inline="ss14a")
+ss14DiVal   = input.float(25,  "",                   group="[ШОРТ] Закрытие: С DI+", inline="ss14a")
+
+enableSS14b = input.bool(false, "SS14b: RSI+DI+",    group="[ШОРТ] Закрытие: С DI+", inline="ss14b")
+ss14bRsiOp  = input.string("<", "", options=["<",">"], group="[ШОРТ] Закрытие: С DI+", inline="ss14b")
+ss14bRsiVal = input.float(25,  "RSI",                group="[ШОРТ] Закрытие: С DI+", inline="ss14b")
+ss14bDiOp   = input.string(">", "DI+", options=["<",">"], group="[ШОРТ] Закрытие: С DI+", inline="ss14b")
+ss14bDiVal  = input.float(30,  "",                   group="[ШОРТ] Закрытие: С DI+", inline="ss14b")
+
+enableSS14c = input.bool(false, "SS14c: RSI+DI+",    group="[ШОРТ] Закрытие: С DI+", inline="ss14c")
+ss14cRsiOp  = input.string(">", "", options=["<",">"], group="[ШОРТ] Закрытие: С DI+", inline="ss14c")
+ss14cRsiVal = input.float(70,  "RSI",                group="[ШОРТ] Закрытие: С DI+", inline="ss14c")
+ss14cDiOp   = input.string("<", "DI+", options=["<",">"], group="[ШОРТ] Закрытие: С DI+", inline="ss14c")
+ss14cDiVal  = input.float(20,  "",                   group="[ШОРТ] Закрытие: С DI+", inline="ss14c")
+
+enableSS14d = input.bool(false, "SS14d: RSI+DI+",    group="[ШОРТ] Закрытие: С DI+", inline="ss14d")
+ss14dRsiOp  = input.string(">", "", options=["<",">"], group="[ШОРТ] Закрытие: С DI+", inline="ss14d")
+ss14dRsiVal = input.float(65,  "RSI",                group="[ШОРТ] Закрытие: С DI+", inline="ss14d")
+ss14dDiOp   = input.string("<", "DI+", options=["<",">"], group="[ШОРТ] Закрытие: С DI+", inline="ss14d")
+ss14dDiVal  = input.float(25,  "",                   group="[ШОРТ] Закрытие: С DI+", inline="ss14d")
+
+enableSS15  = input.bool(false, "SS15a: VFI+DI+",   group="[ШОРТ] Закрытие: С DI+", inline="ss15a")
+ss15VfiOp   = input.string(">", "", options=["<",">"], group="[ШОРТ] Закрытие: С DI+", inline="ss15a")
+ss15VfiVal  = input.float(5,   "VFI",                group="[ШОРТ] Закрытие: С DI+", inline="ss15a")
+ss15DiOp    = input.string(">", "DI+", options=["<",">"], group="[ШОРТ] Закрытие: С DI+", inline="ss15a")
+ss15DiVal   = input.float(25,  "",                   group="[ШОРТ] Закрытие: С DI+", inline="ss15a")
+
+enableSS15b = input.bool(false, "SS15b: VFI+DI+",   group="[ШОРТ] Закрытие: С DI+", inline="ss15b")
+ss15bVfiOp  = input.string(">", "", options=["<",">"], group="[ШОРТ] Закрытие: С DI+", inline="ss15b")
+ss15bVfiVal = input.float(10,  "VFI",                group="[ШОРТ] Закрытие: С DI+", inline="ss15b")
+ss15bDiOp   = input.string(">", "DI+", options=["<",">"], group="[ШОРТ] Закрытие: С DI+", inline="ss15b")
+ss15bDiVal  = input.float(30,  "",                   group="[ШОРТ] Закрытие: С DI+", inline="ss15b")
+
+enableSS15c = input.bool(false, "SS15c: VFI+DI+",   group="[ШОРТ] Закрытие: С DI+", inline="ss15c")
+ss15cVfiOp  = input.string("<", "", options=["<",">"], group="[ШОРТ] Закрытие: С DI+", inline="ss15c")
+ss15cVfiVal = input.float(-5,  "VFI",                group="[ШОРТ] Закрытие: С DI+", inline="ss15c")
+ss15cDiOp   = input.string("<", "DI+", options=["<",">"], group="[ШОРТ] Закрытие: С DI+", inline="ss15c")
+ss15cDiVal  = input.float(20,  "",                   group="[ШОРТ] Закрытие: С DI+", inline="ss15c")
+
+enableSS15d = input.bool(false, "SS15d: VFI+DI+",   group="[ШОРТ] Закрытие: С DI+", inline="ss15d")
+ss15dVfiOp  = input.string("<", "", options=["<",">"], group="[ШОРТ] Закрытие: С DI+", inline="ss15d")
+ss15dVfiVal = input.float(-10, "VFI",                group="[ШОРТ] Закрытие: С DI+", inline="ss15d")
+ss15dDiOp   = input.string("<", "DI+", options=["<",">"], group="[ШОРТ] Закрытие: С DI+", inline="ss15d")
+ss15dDiVal  = input.float(25,  "",                   group="[ШОРТ] Закрытие: С DI+", inline="ss15d")
+
+enableSS16  = input.bool(false, "SS16a: RSI+VFI+DI+", group="[ШОРТ] Закрытие: С DI+", inline="ss16a")
+ss16RsiOp   = input.string("<", "", options=["<",">"], group="[ШОРТ] Закрытие: С DI+", inline="ss16a")
+ss16RsiVal  = input.float(30,  "RSI",                group="[ШОРТ] Закрытие: С DI+", inline="ss16a")
+ss16VfiOp   = input.string(">", "VFI", options=["<",">"], group="[ШОРТ] Закрытие: С DI+", inline="ss16a")
+ss16VfiVal  = input.float(5,   "",                   group="[ШОРТ] Закрытие: С DI+", inline="ss16a")
+ss16DiOp    = input.string(">", "DI+", options=["<",">"], group="[ШОРТ] Закрытие: С DI+", inline="ss16a")
+ss16DiVal   = input.float(25,  "",                   group="[ШОРТ] Закрытие: С DI+", inline="ss16a")
+
+enableSS16b = input.bool(false, "SS16b: RSI+VFI+DI+", group="[ШОРТ] Закрытие: С DI+", inline="ss16b")
+ss16bRsiOp  = input.string("<", "", options=["<",">"], group="[ШОРТ] Закрытие: С DI+", inline="ss16b")
+ss16bRsiVal = input.float(25,  "RSI",                group="[ШОРТ] Закрытие: С DI+", inline="ss16b")
+ss16bVfiOp  = input.string(">", "VFI", options=["<",">"], group="[ШОРТ] Закрытие: С DI+", inline="ss16b")
+ss16bVfiVal = input.float(10,  "",                   group="[ШОРТ] Закрытие: С DI+", inline="ss16b")
+ss16bDiOp   = input.string(">", "DI+", options=["<",">"], group="[ШОРТ] Закрытие: С DI+", inline="ss16b")
+ss16bDiVal  = input.float(30,  "",                   group="[ШОРТ] Закрытие: С DI+", inline="ss16b")
+
+enableSS16c = input.bool(false, "SS16c: RSI+VFI+DI+", group="[ШОРТ] Закрытие: С DI+", inline="ss16c")
+ss16cRsiOp  = input.string(">", "", options=["<",">"], group="[ШОРТ] Закрытие: С DI+", inline="ss16c")
+ss16cRsiVal = input.float(70,  "RSI",                group="[ШОРТ] Закрытие: С DI+", inline="ss16c")
+ss16cVfiOp  = input.string("<", "VFI", options=["<",">"], group="[ШОРТ] Закрытие: С DI+", inline="ss16c")
+ss16cVfiVal = input.float(-5,  "",                   group="[ШОРТ] Закрытие: С DI+", inline="ss16c")
+ss16cDiOp   = input.string("<", "DI+", options=["<",">"], group="[ШОРТ] Закрытие: С DI+", inline="ss16c")
+ss16cDiVal  = input.float(20,  "",                   group="[ШОРТ] Закрытие: С DI+", inline="ss16c")
+
+enableSS16d = input.bool(false, "SS16d: RSI+VFI+DI+", group="[ШОРТ] Закрытие: С DI+", inline="ss16d")
+ss16dRsiOp  = input.string(">", "", options=["<",">"], group="[ШОРТ] Закрытие: С DI+", inline="ss16d")
+ss16dRsiVal = input.float(65,  "RSI",                group="[ШОРТ] Закрытие: С DI+", inline="ss16d")
+ss16dVfiOp  = input.string("<", "VFI", options=["<",">"], group="[ШОРТ] Закрытие: С DI+", inline="ss16d")
+ss16dVfiVal = input.float(-10, "",                   group="[ШОРТ] Закрытие: С DI+", inline="ss16d")
+ss16dDiOp   = input.string("<", "DI+", options=["<",">"], group="[ШОРТ] Закрытие: С DI+", inline="ss16d")
+ss16dDiVal  = input.float(25,  "",                   group="[ШОРТ] Закрытие: С DI+", inline="ss16d")
+
+enableSSD1 = input.bool(false, "SSD1: RSI",         group="[ШОРТ] Прямое закрытие (без фильтров)", inline="ssd1")
+ssd1RsiOp  = input.string("<", "", options=["<",">"], group="[ШОРТ] Прямое закрытие (без фильтров)", inline="ssd1")
+ssd1RsiVal = input.float(30,  "RSI",                group="[ШОРТ] Прямое закрытие (без фильтров)", inline="ssd1")
+
+enableSSD2 = input.bool(false, "SSD2: VFI",         group="[ШОРТ] Прямое закрытие (без фильтров)", inline="ssd2")
+ssd2VfiOp  = input.string(">", "", options=["<",">"], group="[ШОРТ] Прямое закрытие (без фильтров)", inline="ssd2")
+ssd2VfiVal = input.float(5,   "VFI",                group="[ШОРТ] Прямое закрытие (без фильтров)", inline="ssd2")
+
+enableSSD3 = input.bool(false, "SSD3: DI+",         group="[ШОРТ] Прямое закрытие (без фильтров)", inline="ssd3")
+ssd3DiOp   = input.string(">", "", options=["<",">"], group="[ШОРТ] Прямое закрытие (без фильтров)", inline="ssd3")
+ssd3DiVal  = input.float(25,  "DI+",                group="[ШОРТ] Прямое закрытие (без фильтров)", inline="ssd3")
+
+sbbUseSale  = input.bool(false, "Блок если была покупка за N свечей", group="[ШОРТ] Фильтр блокировки входа")
+sbbSaleBars = input.int(10,     "Кол-во свечей назад",               group="[ШОРТ] Фильтр блокировки входа", minval=1)
+sbbUseRsi   = input.bool(false, "Блок если RSI был экстремальным",   group="[ШОРТ] Фильтр блокировки входа", inline="sbbrsi")
+sbbRsiOp    = input.string("<", "", options=["<",">"],                group="[ШОРТ] Фильтр блокировки входа", inline="sbbrsi")
+sbbRsiVal   = input.float(20,   "RSI за N свечей назад",             group="[ШОРТ] Фильтр блокировки входа", inline="sbbrsi")
+sbbRsiBars  = input.int(10,     "",                                   group="[ШОРТ] Фильтр блокировки входа", inline="sbbrsi", minval=1)
+sbbUseVfi   = input.bool(false, "Блок если VFI был экстремальным",   group="[ШОРТ] Фильтр блокировки входа", inline="sbbvfi")
+sbbVfiOp    = input.string(">", "", options=["<",">"],                group="[ШОРТ] Фильтр блокировки входа", inline="sbbvfi")
+sbbVfiVal   = input.float(20,   "VFI за N свечей назад",             group="[ШОРТ] Фильтр блокировки входа", inline="sbbvfi")
+sbbVfiBars  = input.int(10,     "",                                   group="[ШОРТ] Фильтр блокировки входа", inline="sbbvfi", minval=1)
+
+// ═══════════════════════════════════════════════════════════════════════════
+// ПЕРЕМЕННЫЕ СОСТОЯНИЯ ПОЗИЦИЙ (ОТВЯЗАННЫЕ ОТ ДВИЖКА ТВ ДЛЯ ОДНОВРЕМЕННОСТИ)
+// ═══════════════════════════════════════════════════════════════════════════
+var bool  longIsOpen    = false
+var bool  shortIsOpen   = false
+
+// Лонг — состояние
+var float lEntryPrice   = na
+var int   lEntryBar     = na
+var string lEntryReason = ""
+var string lSellReason  = ""
+var bool  lStopActive   = false
+var float lTrailStop    = na
+var int   lPhase        = 0
+var int   lSignalBar    = na
+
+// Шорт — состояние
+var float sEntryPrice   = na
+var int   sEntryBar     = na
+var string sEntryReason = ""
+var string sCloseReason = ""
+var bool  sStopActive   = false
+var float sTrailStop    = na
+var int   sPhase        = 0
+var int   sSignalBar    = na
+
+// ═══════════════════════════════════════════════════════════════════════════
+// РАСЧЁТ ИНДИКАТОРОВ
+// ═══════════════════════════════════════════════════════════════════════════
+rsi     = ta.rsi(close, rsiPeriod)
+typical = hlc3
+inter   = math.log(typical) - math.log(nz(typical[1], typical))
+vinter  = ta.stdev(inter, 30)
+cutoff  = vfiCoef * vinter * close
+vave    = ta.sma(volume, vfiLength)[1]
+vmax    = vave * vfiVcoef
+vc      = volume < vmax ? volume : vmax
+mf      = typical - nz(typical[1], typical)
+vcp     = mf > cutoff ? vc : mf < -cutoff ? -vc : 0
+vfi     = ta.sma(math.sum(vcp, vfiLength) / nz(vave, 1), 3)
+
+adxTR      = math.max(math.max(high - low, math.abs(high - nz(close[1], close))), math.abs(low - nz(close[1], close)))
+adxDMPos   = high - nz(high[1], high) > nz(low[1], low) - low ? math.max(high - nz(high[1], high), 0.0) : 0.0
+adxDMMinus = nz(low[1], low) - low > high - nz(high[1], high) ? math.max(nz(low[1], low) - low, 0.0)   : 0.0
+var float smTR  = 0.0
+var float smPos = 0.0
+var float smNeg = 0.0
+smTR  := nz(smTR[1])  - nz(smTR[1])  / adxLen + adxTR
+smPos := nz(smPos[1]) - nz(smPos[1]) / adxLen + adxDMPos
+smNeg := nz(smNeg[1]) - nz(smNeg[1]) / adxLen + adxDMMinus
+diPos = smTR != 0 ? smPos / smTR * 100 : 0.0
+diNeg = smTR != 0 ? smNeg / smTR * 100 : 0.0
+dx    = (diPos + diNeg) != 0 ? math.abs(diPos - diNeg) / (diPos + diNeg) * 100 : 0.0
+adx   = ta.sma(dx, adxLen)
+
+// Фиксированные параметры пивотов
+pivotBars = 2
+ph = ta.pivothigh(pivotBars, pivotBars)
+pl = ta.pivotlow(pivotBars, pivotBars)
+
+var array<int>    phBarIndices   = array.new_int()
+var array<string> phTypes        = array.new_string()
+var array<int>    plBarIndices   = array.new_int()
+var array<string> plTypes        = array.new_string()
+
+if not na(ph)
+    array.push(phBarIndices, bar_index - pivotBars)
+    array.push(phTypes, "HH") // Упрощённо (между ними любые -> всё равно)
+    if array.size(phBarIndices) > 500
+        array.shift(phBarIndices)
+        array.shift(phTypes)
+
+if not na(pl)
+    array.push(plBarIndices, bar_index - pivotBars)
+    array.push(plTypes, "LL")
+    if array.size(plBarIndices) > 500
+        array.shift(plBarIndices)
+        array.shift(plTypes)
+
+// ═══════════════════════════════════════════════════════════════════════════
+// ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ УСЛОВИЙ
+// ═══════════════════════════════════════════════════════════════════════════
+is_met(val, op, thresh) => op == "<" ? val < thresh : val > thresh
+
+// Для входа: поиск на ЛЮБОЙ свече паттерна
+checkRange(startBar, endBar, series float val_series, op, thresh) =>
+    res = false
+    if bar_index >= endBar
+        for i = startBar to endBar
+            if is_met(val_series[i], op, thresh)
+                res := true
+                break
+    res
+
+// Для выхода: строгий последовательный поиск с окном
+matchExit1(series float v1, string o1, float t1) =>
+    is_met(v1, o1, t1)
+
+matchExit2(series float v1, string o1, float t1, series float v2, string o2, float t2, int w) =>
+    met = false
+    if is_met(v1, o1, t1)
+        for j = 0 to w
+            if is_met(v2[j], o2, t2)
+                met := true
+                break
+    if not met and is_met(v2, o2, t2)
+        for j = 0 to w
+            if is_met(v1[j], o1, t1)
+                met := true
+                break
+    met
+
+matchExit3(series float v1, string o1, float t1, series float v2, string o2, float t2, series float v3, string o3, float t3, int w) =>
+    met = false
+    if is_met(v1, o1, t1)
+        for j = 0 to w
+            if is_met(v2[j], o2, t2)
+                for k = math.max(0, j-w) to j+w
+                    if is_met(v3[k], o3, t3)
+                        met := true
+    if not met and is_met(v2, o2, t2)
+        for j = 0 to w
+            if is_met(v1[j], o1, t1)
+                for k = 0 to w
+                    if is_met(v3[k], o3, t3)
+                        met := true
+    if not met and is_met(v3, o3, t3)
+        for j = 0 to w
+            if is_met(v2[j], o2, t2)
+                for k = math.max(0, j-w) to j+w
+                    if is_met(v1[k], o1, t1)
+                        met := true
+    met
+
+// ═══════════════════════════════════════════════════════════════════════════
+// УНИВЕРСАЛЬНЫЙ ДЕТЕКТОР ПИВОТ-ПАТТЕРНОВ
+// ═══════════════════════════════════════════════════════════════════════════
+findSinglePivotPair(firstType, secondType, windowBack, windowFwd, signalBar) =>
+    bool found = false
+    int lastPivot = -1
+    useHighFirst  = (firstType == "HH" or firstType == "LH")
+    useHighSecond = (secondType == "HH" or secondType == "LH")
+    startBar = signalBar - windowBack
+    endBar   = signalBar + windowFwd
+    firstFoundBar = -1
+    
+    if useHighFirst and array.size(phBarIndices) > 0
+        for i = 0 to array.size(phBarIndices) - 1
+            pivotBar = array.get(phBarIndices, i)
+            if pivotBar >= startBar and pivotBar <= endBar
+                firstFoundBar := pivotBar
+                break
+    if not useHighFirst and array.size(plBarIndices) > 0
+        for i = 0 to array.size(plBarIndices) - 1
+            pivotBar = array.get(plBarIndices, i)
+            if pivotBar >= startBar and pivotBar <= endBar
+                firstFoundBar := pivotBar
+                break
+    
+    if firstFoundBar >= 0
+        if useHighSecond and array.size(phBarIndices) > 0
+            for i = 0 to array.size(phBarIndices) - 1
+                pivotBar = array.get(phBarIndices, i)
+                if pivotBar > firstFoundBar and pivotBar <= endBar
+                    found := true
+                    lastPivot := pivotBar
+                    break
+        if not useHighSecond and array.size(plBarIndices) > 0
+            for i = 0 to array.size(plBarIndices) - 1
+                pivotBar = array.get(plBarIndices, i)
+                if pivotBar > firstFoundBar and pivotBar <= endBar
+                    found := true
+                    lastPivot := pivotBar
+                    break
+    [found, lastPivot]
+
+pivotMultiPatternDetector(useA, firstA, secondA, useB, firstB, secondB, useC, firstC, secondC, useD, firstD, secondD, windowBack, windowFwd, signalBar) =>
+    enabledCount = (useA?1:0) + (useB?1:0) + (useC?1:0) + (useD?1:0)
+    if enabledCount == 0
+        [true, "Отключен", -1]
+    else
+        foundCount = 0
+        maxLastPivot = -1
+        patternSummary = ""
+        
+        if useA
+            [fA, lA] = findSinglePivotPair(firstA, secondA, windowBack, windowFwd, signalBar)
+            if fA
+                foundCount += 1
+                patternSummary += "A "
+                maxLastPivot := math.max(maxLastPivot, lA)
+        if useB
+            [fB, lB] = findSinglePivotPair(firstB, secondB, windowBack, windowFwd, signalBar)
+            if fB
+                foundCount += 1
+                patternSummary += "B "
+                maxLastPivot := math.max(maxLastPivot, lB)
+        if useC
+            [fC, lC] = findSinglePivotPair(firstC, secondC, windowBack, windowFwd, signalBar)
+            if fC
+                foundCount += 1
+                patternSummary += "C "
+                maxLastPivot := math.max(maxLastPivot, lC)
+        if useD
+            [fD, lD] = findSinglePivotPair(firstD, secondD, windowBack, windowFwd, signalBar)
+            if fD
+                foundCount += 1
+                patternSummary += "D "
+                maxLastPivot := math.max(maxLastPivot, lD)
+        
+        allFound = (foundCount == enabledCount)
+        [allFound, allFound ? patternSummary : "Провал", maxLastPivot]
+
+// ═══════════════════════════════════════════════════════════════════════════
+// СВЕЧНОЙ ПАТТЕРН
+// ═══════════════════════════════════════════════════════════════════════════
+isRed   = close < open
+isGreen = close >= open
+
+var int redCount   = 0
+var int greenCount = 0
+
+if isRed
+    redCount   := redCount + 1
+    greenCount := 0
+else
+    greenCount := greenCount + 1
+    redCount   := 0
+
+isFirstGreenAfterRed = not isRed and redCount[1] >= minRedCandles
+isFirstRedAfterGreen = isRed and greenCount[1] >= minRedCandles
+
+var string pivotDetectorResult = ""
+
+// ═══════════════════════════════════════════════════════════════════════════
+// ЛОГИКА ЛОНГА (ВХОД)
+// ═══════════════════════════════════════════════════════════════════════════
+var string lBuyReason  = ""
+lBuySignal = false
+
+if enableLong and isFirstGreenAfterRed
+    rangeLen = redCount[1] + 1
+    anyMet   = false
+
+    if not anyMet and enableLB1
+        if checkRange(0, rangeLen-1, rsi, lb1RsiOp, lb1RsiVal) and checkRange(0, rangeLen-1, vfi, lb1VfiOp, lb1VfiVal)
+            anyMet := true
+            lBuyReason := "LB1: RSI" + lb1RsiOp + str.tostring(lb1RsiVal) + " VFI" + lb1VfiOp + str.tostring(lb1VfiVal)
+    if not anyMet and enableLB2
+        if checkRange(0, rangeLen-1, rsi, lb2RsiOp, lb2RsiVal) and checkRange(0, rangeLen-1, vfi, lb2VfiOp, lb2VfiVal)
+            anyMet := true
+            lBuyReason := "LB2: RSI" + lb2RsiOp + str.tostring(lb2RsiVal) + " VFI" + lb2VfiOp + str.tostring(lb2VfiVal)
+    if not anyMet and enableLB3
+        if checkRange(0, rangeLen-1, rsi, lb3RsiOp, lb3RsiVal) and checkRange(0, rangeLen-1, vfi, lb3VfiOp, lb3VfiVal)
+            anyMet := true
+            lBuyReason := "LB3: RSI" + lb3RsiOp + str.tostring(lb3RsiVal) + " VFI" + lb3VfiOp + str.tostring(lb3VfiVal)
+    if not anyMet and enableLB4
+        if checkRange(0, rangeLen-1, rsi, lb4RsiOp, lb4RsiVal) and checkRange(0, rangeLen-1, vfi, lb4VfiOp, lb4VfiVal)
+            anyMet := true
+            lBuyReason := "LB4: RSI" + lb4RsiOp + str.tostring(lb4RsiVal) + " VFI" + lb4VfiOp + str.tostring(lb4VfiVal)
+    if not anyMet and enableLB5
+        if checkRange(0, rangeLen-1, rsi, lb5RsiOp, lb5RsiVal)
+            anyMet := true
+            lBuyReason := "LB5: RSI" + lb5RsiOp + str.tostring(lb5RsiVal)
+    if not anyMet and enableLB6
+        if checkRange(0, rangeLen-1, rsi, lb6RsiOp, lb6RsiVal)
+            anyMet := true
+            lBuyReason := "LB6: RSI" + lb6RsiOp + str.tostring(lb6RsiVal)
+    if not anyMet and enableLB7
+        if checkRange(0, rangeLen-1, rsi, lb7RsiOp, lb7RsiVal)
+            anyMet := true
+            lBuyReason := "LB7: RSI" + lb7RsiOp + str.tostring(lb7RsiVal)
+    if not anyMet and enableLB8
+        if checkRange(0, rangeLen-1, rsi, lb8RsiOp, lb8RsiVal)
+            anyMet := true
+            lBuyReason := "LB8: RSI" + lb8RsiOp + str.tostring(lb8RsiVal)
+    if not anyMet and enableLB9
+        if checkRange(0, rangeLen-1, vfi, lb9VfiOp, lb9VfiVal)
+            anyMet := true
+            lBuyReason := "LB9: VFI" + lb9VfiOp + str.tostring(lb9VfiVal)
+    if not anyMet and enableLB10
+        if checkRange(0, rangeLen-1, vfi, lb10VfiOp, lb10VfiVal)
+            anyMet := true
+            lBuyReason := "LB10: VFI" + lb10VfiOp + str.tostring(lb10VfiVal)
+    if not anyMet and enableLB11
+        if checkRange(0, rangeLen-1, vfi, lb11VfiOp, lb11VfiVal)
+            anyMet := true
+            lBuyReason := "LB11: VFI" + lb11VfiOp + str.tostring(lb11VfiVal)
+    if not anyMet and enableLB12
+        if checkRange(0, rangeLen-1, vfi, lb12VfiOp, lb12VfiVal)
+            anyMet := true
+            lBuyReason := "LB12: VFI" + lb12VfiOp + str.tostring(lb12VfiVal)
+    if not anyMet and enableLB13
+        if checkRange(0, rangeLen-1, diPos, lb13AdxOp, lb13AdxVal)
+            anyMet := true
+            lBuyReason := "LB13a: DI+" + lb13AdxOp + str.tostring(lb13AdxVal)
+    if not anyMet and enableLB13b
+        if checkRange(0, rangeLen-1, diPos, lb13bAdxOp, lb13bAdxVal)
+            anyMet := true
+            lBuyReason := "LB13b: DI+" + lb13bAdxOp + str.tostring(lb13bAdxVal)
+    if not anyMet and enableLB14
+        if checkRange(0, rangeLen-1, rsi, lb14RsiOp, lb14RsiVal) and checkRange(0, rangeLen-1, diPos, lb14AdxOp, lb14AdxVal)
+            anyMet := true
+            lBuyReason := "LB14a"
+    if not anyMet and enableLB14b
+        if checkRange(0, rangeLen-1, rsi, lb14bRsiOp, lb14bRsiVal) and checkRange(0, rangeLen-1, diPos, lb14bAdxOp, lb14bAdxVal)
+            anyMet := true
+            lBuyReason := "LB14b"
+    if not anyMet and enableLB14c
+        if checkRange(0, rangeLen-1, rsi, lb14cRsiOp, lb14cRsiVal) and checkRange(0, rangeLen-1, diPos, lb14cAdxOp, lb14cAdxVal)
+            anyMet := true
+            lBuyReason := "LB14c"
+    if not anyMet and enableLB14d
+        if checkRange(0, rangeLen-1, rsi, lb14dRsiOp, lb14dRsiVal) and checkRange(0, rangeLen-1, diPos, lb14dAdxOp, lb14dAdxVal)
+            anyMet := true
+            lBuyReason := "LB14d"
+    if not anyMet and enableLB15
+        if checkRange(0, rangeLen-1, vfi, lb15VfiOp, lb15VfiVal) and checkRange(0, rangeLen-1, diPos, lb15AdxOp, lb15AdxVal)
+            anyMet := true
+            lBuyReason := "LB15a"
+    if not anyMet and enableLB15b
+        if checkRange(0, rangeLen-1, vfi, lb15bVfiOp, lb15bVfiVal) and checkRange(0, rangeLen-1, diPos, lb15bAdxOp, lb15bAdxVal)
+            anyMet := true
+            lBuyReason := "LB15b"
+    if not anyMet and enableLB15c
+        if checkRange(0, rangeLen-1, vfi, lb15cVfiOp, lb15cVfiVal) and checkRange(0, rangeLen-1, diPos, lb15cAdxOp, lb15cAdxVal)
+            anyMet := true
+            lBuyReason := "LB15c"
+    if not anyMet and enableLB15d
+        if checkRange(0, rangeLen-1, vfi, lb15dVfiOp, lb15dVfiVal) and checkRange(0, rangeLen-1, diPos, lb15dAdxOp, lb15dAdxVal)
+            anyMet := true
+            lBuyReason := "LB15d"
+    if not anyMet and enableLB16
+        if checkRange(0, rangeLen-1, rsi, lb16RsiOp, lb16RsiVal) and checkRange(0, rangeLen-1, vfi, lb16VfiOp, lb16VfiVal) and checkRange(0, rangeLen-1, diPos, lb16AdxOp, lb16AdxVal)
+            anyMet := true
+            lBuyReason := "LB16a"
+    if not anyMet and enableLB16b
+        if checkRange(0, rangeLen-1, rsi, lb16bRsiOp, lb16bRsiVal) and checkRange(0, rangeLen-1, vfi, lb16bVfiOp, lb16bVfiVal) and checkRange(0, rangeLen-1, diPos, lb16bAdxOp, lb16bAdxVal)
+            anyMet := true
+            lBuyReason := "LB16b"
+    if not anyMet and enableLB16c
+        if checkRange(0, rangeLen-1, rsi, lb16cRsiOp, lb16cRsiVal) and checkRange(0, rangeLen-1, vfi, lb16cVfiOp, lb16cVfiVal) and checkRange(0, rangeLen-1, diPos, lb16cAdxOp, lb16cAdxVal)
+            anyMet := true
+            lBuyReason := "LB16c"
+    if not anyMet and enableLB16d
+        if checkRange(0, rangeLen-1, rsi, lb16dRsiOp, lb16dRsiVal) and checkRange(0, rangeLen-1, vfi, lb16dVfiOp, lb16dVfiVal) and checkRange(0, rangeLen-1, diPos, lb16dAdxOp, lb16dAdxVal)
+            anyMet := true
+            lBuyReason := "LB16d"
+
+    if anyMet
+        lBuySignal := true
+
+var int lLastExitBar = na
+lBuyBlocked = false
+if lBuySignal
+    if lbbUseSale and not na(lLastExitBar) and (bar_index - lLastExitBar) <= lbbSaleBars
+        lBuyBlocked := true
+    if lbbUseRsi and not lBuyBlocked
+        if checkRange(0, lbbRsiBars - 1, rsi, lbbRsiOp, lbbRsiVal)
+            lBuyBlocked := true
+    if lbbUseVfi and not lBuyBlocked
+        if checkRange(0, lbbVfiBars - 1, vfi, lbbVfiOp, lbbVfiVal)
+            lBuyBlocked := true
+
+if lBuySignal and not lBuyBlocked
+    pivotEntryOk = true
+    if usePivotLongEntryA or usePivotLongEntryB or usePivotLongEntryC or usePivotLongEntryD
+        [pF, pE, _] = pivotMultiPatternDetector(
+             usePivotLongEntryA, pivotLongEntryAFirst, pivotLongEntryASecond,
+             usePivotLongEntryB, pivotLongEntryBFirst, pivotLongEntryBSecond,
+             usePivotLongEntryC, pivotLongEntryCFirst, pivotLongEntryCSecond,
+             usePivotLongEntryD, pivotLongEntryDFirst, pivotLongEntryDSecond,
+             pivotLongEntryWinBack, pivotLongEntryWinFwd, bar_index)
+        if pF
+            pivotDetectorResult := "Long Entry: " + pE
+        else
+            pivotEntryOk := false
+            
+    if pivotEntryOk
+        // FLIP логика
+        if allowFlip and shortIsOpen
+            profitPct = ((sEntryPrice - close) / sEntryPrice * 100)
+            lblColor  = profitPct >= 0 ? color.new(color.green, 10) : color.new(color.red, 10)
+            strategy.close("Short", comment="Закрыт (Flip)")
+            shortIsOpen := false
+            sStopActive := false
+            sPhase      := 0
+            if showLabels
+                label.new(bar_index, high, "ЗАКРЫТИЕ ШОРТ (Flip)\nP/L: " + str.tostring(profitPct, "#.##") + "%", color=lblColor, textcolor=color.white, style=label.style_label_down, size=size.small)
+        
+        // Открытие
+        if not longIsOpen
+            strategy.entry("Long", strategy.long)
+            longIsOpen  := true
+            lEntryPrice := close
+            lEntryBar   := bar_index
+            if showLabels
+                label.new(bar_index, low, "ПОКУПКА\n" + lBuyReason, color=color.green, textcolor=color.white, style=label.style_label_up, size=size.normal)
+
+// ═══════════════════════════════════════════════════════════════════════════
+// ЛОГИКА ПРОДАЖИ (ЛОНГ)
+// ═══════════════════════════════════════════════════════════════════════════
+
+// ПРЯМАЯ ПРОДАЖА ЛОНГ (Без пивотов)
+if longIsOpen and lPhase == 0 and not lStopActive and bar_index > lEntryBar
+    directSellMet = false
+    directSellRsn = ""
+    if not directSellMet and enableLSD1 and matchExit1(rsi, lsd1RsiOp, lsd1RsiVal)
+        directSellMet := true
+        directSellRsn := "LSD1"
+    if not directSellMet and enableLSD2 and matchExit1(vfi, lsd2VfiOp, lsd2VfiVal)
+        directSellMet := true
+        directSellRsn := "LSD2"
+    if not directSellMet and enableLSD3 and matchExit1(diPos, lsd3DiOp, lsd3DiVal)
+        directSellMet := true
+        directSellRsn := "LSD3"
+    if directSellMet
+        lSellReason := directSellRsn
+        lTrailStop  := low[1]
+        lStopActive := true
+        if showLabels
+            label.new(bar_index, high, "ПРЯМАЯ ПРОДАЖА L\n" + directSellRsn, color=color.purple, textcolor=color.white, style=label.style_label_down, size=size.small)
+
+// ОСНОВНАЯ ПРОДАЖА ЛОНГ
+lSellMet    = false
+lCurSellRsn = ""
+
+if longIsOpen and lPhase == 0 and not lStopActive and bar_index > lEntryBar
+    if not lSellMet and enableLS1 and matchExit2(rsi, ls1RsiOp, ls1RsiVal, vfi, ls1VfiOp, ls1VfiVal, signalWindowLong)
+        lSellMet := true, lCurSellRsn := "LS1"
+    if not lSellMet and enableLS2 and matchExit2(rsi, ls2RsiOp, ls2RsiVal, vfi, ls2VfiOp, ls2VfiVal, signalWindowLong)
+        lSellMet := true, lCurSellRsn := "LS2"
+    if not lSellMet and enableLS3 and matchExit2(rsi, ls3RsiOp, ls3RsiVal, vfi, ls3VfiOp, ls3VfiVal, signalWindowLong)
+        lSellMet := true, lCurSellRsn := "LS3"
+    if not lSellMet and enableLS4 and matchExit2(rsi, ls4RsiOp, ls4RsiVal, vfi, ls4VfiOp, ls4VfiVal, signalWindowLong)
+        lSellMet := true, lCurSellRsn := "LS4"
+    if not lSellMet and enableLS5 and matchExit1(rsi, ls5RsiOp, ls5RsiVal)
+        lSellMet := true, lCurSellRsn := "LS5"
+    if not lSellMet and enableLS6 and matchExit1(rsi, ls6RsiOp, ls6RsiVal)
+        lSellMet := true, lCurSellRsn := "LS6"
+    if not lSellMet and enableLS7 and matchExit1(rsi, ls7RsiOp, ls7RsiVal)
+        lSellMet := true, lCurSellRsn := "LS7"
+    if not lSellMet and enableLS8 and matchExit1(rsi, ls8RsiOp, ls8RsiVal)
+        lSellMet := true, lCurSellRsn := "LS8"
+    if not lSellMet and enableLS9 and matchExit1(vfi, ls9VfiOp, ls9VfiVal)
+        lSellMet := true, lCurSellRsn := "LS9"
+    if not lSellMet and enableLS10 and matchExit1(vfi, ls10VfiOp, ls10VfiVal)
+        lSellMet := true, lCurSellRsn := "LS10"
+    if not lSellMet and enableLS11 and matchExit1(vfi, ls11VfiOp, ls11VfiVal)
+        lSellMet := true, lCurSellRsn := "LS11"
+    if not lSellMet and enableLS12 and matchExit1(vfi, ls12VfiOp, ls12VfiVal)
+        lSellMet := true, lCurSellRsn := "LS12"
+    if not lSellMet and enableLS13 and matchExit1(diPos, ls13DiOp, ls13DiVal)
+        lSellMet := true, lCurSellRsn := "LS13a"
+    if not lSellMet and enableLS13b and matchExit1(diPos, ls13bDiOp, ls13bDiVal)
+        lSellMet := true, lCurSellRsn := "LS13b"
+    if not lSellMet and enableLS14 and matchExit2(rsi, ls14RsiOp, ls14RsiVal, diPos, ls14DiOp, ls14DiVal, signalWindowLong)
+        lSellMet := true, lCurSellRsn := "LS14a"
+    if not lSellMet and enableLS14b and matchExit2(rsi, ls14bRsiOp, ls14bRsiVal, diPos, ls14bDiOp, ls14bDiVal, signalWindowLong)
+        lSellMet := true, lCurSellRsn := "LS14b"
+    if not lSellMet and enableLS14c and matchExit2(rsi, ls14cRsiOp, ls14cRsiVal, diPos, ls14cDiOp, ls14cDiVal, signalWindowLong)
+        lSellMet := true, lCurSellRsn := "LS14c"
+    if not lSellMet and enableLS14d and matchExit2(rsi, ls14dRsiOp, ls14dRsiVal, diPos, ls14dDiOp, ls14dDiVal, signalWindowLong)
+        lSellMet := true, lCurSellRsn := "LS14d"
+    if not lSellMet and enableLS15 and matchExit2(vfi, ls15VfiOp, ls15VfiVal, diPos, ls15DiOp, ls15DiVal, signalWindowLong)
+        lSellMet := true, lCurSellRsn := "LS15a"
+    if not lSellMet and enableLS15b and matchExit2(vfi, ls15bVfiOp, ls15bVfiVal, diPos, ls15bDiOp, ls15bDiVal, signalWindowLong)
+        lSellMet := true, lCurSellRsn := "LS15b"
+    if not lSellMet and enableLS15c and matchExit2(vfi, ls15cVfiOp, ls15cVfiVal, diPos, ls15cDiOp, ls15cDiVal, signalWindowLong)
+        lSellMet := true, lCurSellRsn := "LS15c"
+    if not lSellMet and enableLS15d and matchExit2(vfi, ls15dVfiOp, ls15dVfiVal, diPos, ls15dDiOp, ls15dDiVal, signalWindowLong)
+        lSellMet := true, lCurSellRsn := "LS15d"
+    if not lSellMet and enableLS16 and matchExit3(rsi, ls16RsiOp, ls16RsiVal, vfi, ls16VfiOp, ls16VfiVal, diPos, ls16DiOp, ls16DiVal, signalWindowLong)
+        lSellMet := true, lCurSellRsn := "LS16a"
+    if not lSellMet and enableLS16b and matchExit3(rsi, ls16bRsiOp, ls16bRsiVal, vfi, ls16bVfiOp, ls16bVfiVal, diPos, ls16bDiOp, ls16bDiVal, signalWindowLong)
+        lSellMet := true, lCurSellRsn := "LS16b"
+    if not lSellMet and enableLS16c and matchExit3(rsi, ls16cRsiOp, ls16cRsiVal, vfi, ls16cVfiOp, ls16cVfiVal, diPos, ls16cDiOp, ls16cDiVal, signalWindowLong)
+        lSellMet := true, lCurSellRsn := "LS16c"
+    if not lSellMet and enableLS16d and matchExit3(rsi, ls16dRsiOp, ls16dRsiVal, vfi, ls16dVfiOp, ls16dVfiVal, diPos, ls16dDiOp, ls16dDiVal, signalWindowLong)
+        lSellMet := true, lCurSellRsn := "LS16d"
+
+    if lSellMet
+        lSellReason := lCurSellRsn
+        lSignalBar  := bar_index
+        if usePivotLongExitA or usePivotLongExitB or usePivotLongExitC or usePivotLongExitD
+            lPhase := 2 // Ждем окончания окна для пивота
+        else
+            lTrailStop  := low[1]
+            lStopActive := true
+
+// ОЖИДАНИЕ ОКНА ПИВОТА
+if longIsOpen and lPhase == 2
+    if bar_index - lSignalBar == pivotLongExitWinFwd
+        [pF, pE, maxLastBar] = pivotMultiPatternDetector(
+             usePivotLongExitA, pivotLongExitAFirst, pivotLongExitASecond,
+             usePivotLongExitB, pivotLongExitBFirst, pivotLongExitBSecond,
+             usePivotLongExitC, pivotLongExitCFirst, pivotLongExitCSecond,
+             usePivotLongExitD, pivotLongExitDFirst, pivotLongExitDSecond,
+             pivotLongExitWinBack, pivotLongExitWinFwd, lSignalBar)
+        
+        if pF
+            pivotDetectorResult := "Exit L: " + pE
+            stopOffset  = maxLastBar <= lSignalBar ? lSignalBar - 1 : maxLastBar - 1
+            lTrailStop  := low[bar_index - stopOffset]
+            lStopActive := true
+            lPhase      := 0
+        else
+            lPhase      := 0 // Паттерн не найден - отменяем продажу
+
+// ИСПОЛНЕНИЕ СТОПА ЛОНГ
+if lStopActive and longIsOpen
+    lTrailStop := math.max(nz(lTrailStop, low[1]), low[1])
+    strategy.exit("Stop L", "Long", stop=lTrailStop)
+    
+    // Внутрибарное срабатывание - проверяем достижение стопа
+    if low <= lTrailStop
+        profitPct = ((lTrailStop - lEntryPrice) / lEntryPrice * 100)
+        lblColor  = profitPct >= 0 ? color.new(color.green, 10) : color.new(color.red, 10)
+        longIsOpen  := false
+        lStopActive := false
+        lPhase      := 0
+        lLastExitBar := bar_index
+        if showLabels
+            label.new(bar_index, lTrailStop, "ПРОДАЖА L\n" + lSellReason + "\nЦена: " + str.tostring(lTrailStop,"#.##") + "\nP/L: " + str.tostring(profitPct,"#.##") + "%", color=lblColor, textcolor=color.white, style=label.style_label_down, size=size.normal)
+
+// ═══════════════════════════════════════════════════════════════════════════
+// ЛОГИКА ШОРТА (ВХОД)
+// ═══════════════════════════════════════════════════════════════════════════
+var string sBuyReason  = ""
+sEntrySignal = false
+
+if enableShort and isFirstRedAfterGreen
+    rangeLen = greenCount[1] + 1
+    anyMet   = false
+
+    if not anyMet and enableSB1
+        if checkRange(0, rangeLen-1, rsi, sb1RsiOp, sb1RsiVal) and checkRange(0, rangeLen-1, vfi, sb1VfiOp, sb1VfiVal)
+            anyMet := true, sBuyReason := "SB1"
+    if not anyMet and enableSB2
+        if checkRange(0, rangeLen-1, rsi, sb2RsiOp, sb2RsiVal) and checkRange(0, rangeLen-1, vfi, sb2VfiOp, sb2VfiVal)
+            anyMet := true, sBuyReason := "SB2"
+    if not anyMet and enableSB3
+        if checkRange(0, rangeLen-1, rsi, sb3RsiOp, sb3RsiVal) and checkRange(0, rangeLen-1, vfi, sb3VfiOp, sb3VfiVal)
+            anyMet := true, sBuyReason := "SB3"
+    if not anyMet and enableSB4
+        if checkRange(0, rangeLen-1, rsi, sb4RsiOp, sb4RsiVal) and checkRange(0, rangeLen-1, vfi, sb4VfiOp, sb4VfiVal)
+            anyMet := true, sBuyReason := "SB4"
+    if not anyMet and enableSB5
+        if checkRange(0, rangeLen-1, rsi, sb5RsiOp, sb5RsiVal)
+            anyMet := true, sBuyReason := "SB5"
+    if not anyMet and enableSB6
+        if checkRange(0, rangeLen-1, rsi, sb6RsiOp, sb6RsiVal)
+            anyMet := true, sBuyReason := "SB6"
+    if not anyMet and enableSB7
+        if checkRange(0, rangeLen-1, rsi, sb7RsiOp, sb7RsiVal)
+            anyMet := true, sBuyReason := "SB7"
+    if not anyMet and enableSB8
+        if checkRange(0, rangeLen-1, rsi, sb8RsiOp, sb8RsiVal)
+            anyMet := true, sBuyReason := "SB8"
+    if not anyMet and enableSB9
+        if checkRange(0, rangeLen-1, vfi, sb9VfiOp, sb9VfiVal)
+            anyMet := true, sBuyReason := "SB9"
+    if not anyMet and enableSB10
+        if checkRange(0, rangeLen-1, vfi, sb10VfiOp, sb10VfiVal)
+            anyMet := true, sBuyReason := "SB10"
+    if not anyMet and enableSB11
+        if checkRange(0, rangeLen-1, vfi, sb11VfiOp, sb11VfiVal)
+            anyMet := true, sBuyReason := "SB11"
+    if not anyMet and enableSB12
+        if checkRange(0, rangeLen-1, vfi, sb12VfiOp, sb12VfiVal)
+            anyMet := true, sBuyReason := "SB12"
+    if not anyMet and enableSB13
+        if checkRange(0, rangeLen-1, diPos, sb13AdxOp, sb13AdxVal)
+            anyMet := true, sBuyReason := "SB13a"
+    if not anyMet and enableSB13b
+        if checkRange(0, rangeLen-1, diPos, sb13bAdxOp, sb13bAdxVal)
+            anyMet := true, sBuyReason := "SB13b"
+    if not anyMet and enableSB14
+        if checkRange(0, rangeLen-1, rsi, sb14RsiOp, sb14RsiVal) and checkRange(0, rangeLen-1, diPos, sb14AdxOp, sb14AdxVal)
+            anyMet := true, sBuyReason := "SB14a"
+    if not anyMet and enableSB14b
+        if checkRange(0, rangeLen-1, rsi, sb14bRsiOp, sb14bRsiVal) and checkRange(0, rangeLen-1, diPos, sb14bAdxOp, sb14bAdxVal)
+            anyMet := true, sBuyReason := "SB14b"
+    if not anyMet and enableSB14c
+        if checkRange(0, rangeLen-1, rsi, sb14cRsiOp, sb14cRsiVal) and checkRange(0, rangeLen-1, diPos, sb14cAdxOp, sb14cAdxVal)
+            anyMet := true, sBuyReason := "SB14c"
+    if not anyMet and enableSB14d
+        if checkRange(0, rangeLen-1, rsi, sb14dRsiOp, sb14dRsiVal) and checkRange(0, rangeLen-1, diPos, sb14dAdxOp, sb14dAdxVal)
+            anyMet := true, sBuyReason := "SB14d"
+    if not anyMet and enableSB15
+        if checkRange(0, rangeLen-1, vfi, sb15VfiOp, sb15VfiVal) and checkRange(0, rangeLen-1, diPos, sb15AdxOp, sb15AdxVal)
+            anyMet := true, sBuyReason := "SB15a"
+    if not anyMet and enableSB15b
+        if checkRange(0, rangeLen-1, vfi, sb15bVfiOp, sb15bVfiVal) and checkRange(0, rangeLen-1, diPos, sb15bAdxOp, sb15bAdxVal)
+            anyMet := true, sBuyReason := "SB15b"
+    if not anyMet and enableSB15c
+        if checkRange(0, rangeLen-1, vfi, sb15cVfiOp, sb15cVfiVal) and checkRange(0, rangeLen-1, diPos, sb15cAdxOp, sb15cAdxVal)
+            anyMet := true, sBuyReason := "SB15c"
+    if not anyMet and enableSB15d
+        if checkRange(0, rangeLen-1, vfi, sb15dVfiOp, sb15dVfiVal) and checkRange(0, rangeLen-1, diPos, sb15dAdxOp, sb15dAdxVal)
+            anyMet := true, sBuyReason := "SB15d"
+    if not anyMet and enableSB16
+        if checkRange(0, rangeLen-1, rsi, sb16RsiOp, sb16RsiVal) and checkRange(0, rangeLen-1, vfi, sb16VfiOp, sb16VfiVal) and checkRange(0, rangeLen-1, diPos, sb16AdxOp, sb16AdxVal)
+            anyMet := true, sBuyReason := "SB16a"
+    if not anyMet and enableSB16b
+        if checkRange(0, rangeLen-1, rsi, sb16bRsiOp, sb16bRsiVal) and checkRange(0, rangeLen-1, vfi, sb16bVfiOp, sb16bVfiVal) and checkRange(0, rangeLen-1, diPos, sb16bAdxOp, sb16bAdxVal)
+            anyMet := true, sBuyReason := "SB16b"
+    if not anyMet and enableSB16c
+        if checkRange(0, rangeLen-1, rsi, sb16cRsiOp, sb16cRsiVal) and checkRange(0, rangeLen-1, vfi, sb16cVfiOp, sb16cVfiVal) and checkRange(0, rangeLen-1, diPos, sb16cAdxOp, sb16cAdxVal)
+            anyMet := true, sBuyReason := "SB16c"
+    if not anyMet and enableSB16d
+        if checkRange(0, rangeLen-1, rsi, sb16dRsiOp, sb16dRsiVal) and checkRange(0, rangeLen-1, vfi, sb16dVfiOp, sb16dVfiVal) and checkRange(0, rangeLen-1, diPos, sb16dAdxOp, sb16dAdxVal)
+            anyMet := true, sBuyReason := "SB16d"
+
+    if anyMet
+        sEntrySignal := true
+
+var int sLastExitBar = na
+sEntryBlocked = false
+if sEntrySignal
+    if sbbUseSale and not na(sLastExitBar) and (bar_index - sLastExitBar) <= sbbSaleBars
+        sEntryBlocked := true
+    if sbbUseRsi and not sEntryBlocked
+        if checkRange(0, sbbRsiBars - 1, rsi, sbbRsiOp, sbbRsiVal)
+            sEntryBlocked := true
+    if sbbUseVfi and not sEntryBlocked
+        if checkRange(0, sbbVfiBars - 1, vfi, sbbVfiOp, sbbVfiVal)
+            sEntryBlocked := true
+
+if sEntrySignal and not sEntryBlocked
+    pivotEntryOk = true
+    if usePivotShortEntryA or usePivotShortEntryB or usePivotShortEntryC or usePivotShortEntryD
+        [pF, pE, _] = pivotMultiPatternDetector(
+             usePivotShortEntryA, pivotShortEntryAFirst, pivotShortEntryASecond,
+             usePivotShortEntryB, pivotShortEntryBFirst, pivotShortEntryBSecond,
+             usePivotShortEntryC, pivotShortEntryCFirst, pivotShortEntryCSecond,
+             usePivotShortEntryD, pivotShortEntryDFirst, pivotShortEntryDSecond,
+             pivotShortEntryWinBack, pivotShortEntryWinFwd, bar_index)
+        if pF
+            pivotDetectorResult := "Short Entry: " + pE
+        else
+            pivotEntryOk := false
+            
+    if pivotEntryOk
+        // FLIP логика
+        if allowFlip and longIsOpen
+            profitPct = ((close - lEntryPrice) / lEntryPrice * 100)
+            lblColor  = profitPct >= 0 ? color.new(color.green, 10) : color.new(color.red, 10)
+            strategy.close("Long", comment="Закрыт (Flip)")
+            longIsOpen  := false
+            lStopActive := false
+            lPhase      := 0
+            if showLabels
+                label.new(bar_index, low, "ЗАКРЫТИЕ ЛОНГ (Flip)\nP/L: " + str.tostring(profitPct, "#.##") + "%", color=lblColor, textcolor=color.white, style=label.style_label_up, size=size.small)
+        
+        // Открытие
+        if not shortIsOpen
+            strategy.entry("Short", strategy.short)
+            shortIsOpen := true
+            sEntryPrice := close
+            sEntryBar   := bar_index
+            sEntryReason:= sBuyReason
+            if showLabels
+                label.new(bar_index, high, "ШОРТ\n" + sEntryReason, color=color.red, textcolor=color.white, style=label.style_label_down, size=size.normal)
+
+// ═══════════════════════════════════════════════════════════════════════════
+// ЛОГИКА ЗАКРЫТИЯ ШОРТА
+// ═══════════════════════════════════════════════════════════════════════════
+
+// ПРЯМОЕ ЗАКРЫТИЕ ШОРТА (Без пивотов)
+if shortIsOpen and sPhase == 0 and not sStopActive and bar_index > sEntryBar
+    directCloseMet = false
+    directCloseRsn = ""
+    if not directCloseMet and enableSSD1 and matchExit1(rsi, ssd1RsiOp, ssd1RsiVal)
+        directCloseMet := true, directCloseRsn := "SSD1"
+    if not directCloseMet and enableSSD2 and matchExit1(vfi, ssd2VfiOp, ssd2VfiVal)
+        directCloseMet := true, directCloseRsn := "SSD2"
+    if not directCloseMet and enableSSD3 and matchExit1(diPos, ssd3DiOp, ssd3DiVal)
+        directCloseMet := true, directCloseRsn := "SSD3"
+    if directCloseMet
+        sCloseReason := directCloseRsn
+        sTrailStop   := high[1]
+        sStopActive  := true
+        if showLabels
+            label.new(bar_index, low, "ПРЯМОЕ ЗАКРЫТИЕ S\n" + directCloseRsn, color=color.purple, textcolor=color.white, style=label.style_label_up, size=size.small)
+
+// ОСНОВНОЕ ЗАКРЫТИЕ ШОРТА
+sCloseMet    = false
+sCurCloseRsn = ""
+
+if shortIsOpen and sPhase == 0 and not sStopActive and bar_index > sEntryBar
+    if not sCloseMet and enableSS1 and matchExit2(rsi, ss1RsiOp, ss1RsiVal, vfi, ss1VfiOp, ss1VfiVal, signalWindowShort)
+        sCloseMet := true, sCurCloseRsn := "SS1"
+    if not sCloseMet and enableSS2 and matchExit2(rsi, ss2RsiOp, ss2RsiVal, vfi, ss2VfiOp, ss2VfiVal, signalWindowShort)
+        sCloseMet := true, sCurCloseRsn := "SS2"
+    if not sCloseMet and enableSS3 and matchExit2(rsi, ss3RsiOp, ss3RsiVal, vfi, ss3VfiOp, ss3VfiVal, signalWindowShort)
+        sCloseMet := true, sCurCloseRsn := "SS3"
+    if not sCloseMet and enableSS4 and matchExit2(rsi, ss4RsiOp, ss4RsiVal, vfi, ss4VfiOp, ss4VfiVal, signalWindowShort)
+        sCloseMet := true, sCurCloseRsn := "SS4"
+    if not sCloseMet and enableSS5 and matchExit1(rsi, ss5RsiOp, ss5RsiVal)
+        sCloseMet := true, sCurCloseRsn := "SS5"
+    if not sCloseMet and enableSS6 and matchExit1(rsi, ss6RsiOp, ss6RsiVal)
+        sCloseMet := true, sCurCloseRsn := "SS6"
+    if not sCloseMet and enableSS7 and matchExit1(rsi, ss7RsiOp, ss7RsiVal)
+        sCloseMet := true, sCurCloseRsn := "SS7"
+    if not sCloseMet and enableSS8 and matchExit1(rsi, ss8RsiOp, ss8RsiVal)
+        sCloseMet := true, sCurCloseRsn := "SS8"
+    if not sCloseMet and enableSS9 and matchExit1(vfi, ss9VfiOp, ss9VfiVal)
+        sCloseMet := true, sCurCloseRsn := "SS9"
+    if not sCloseMet and enableSS10 and matchExit1(vfi, ss10VfiOp, ss10VfiVal)
+        sCloseMet := true, sCurCloseRsn := "SS10"
+    if not sCloseMet and enableSS11 and matchExit1(vfi, ss11VfiOp, ss11VfiVal)
+        sCloseMet := true, sCurCloseRsn := "SS11"
+    if not sCloseMet and enableSS12 and matchExit1(vfi, ss12VfiOp, ss12VfiVal)
+        sCloseMet := true, sCurCloseRsn := "SS12"
+    if not sCloseMet and enableSS13 and matchExit1(diPos, ss13DiOp, ss13DiVal)
+        sCloseMet := true, sCurCloseRsn := "SS13a"
+    if not sCloseMet and enableSS13b and matchExit1(diPos, ss13bDiOp, ss13bDiVal)
+        sCloseMet := true, sCurCloseRsn := "SS13b"
+    if not sCloseMet and enableSS14 and matchExit2(rsi, ss14RsiOp, ss14RsiVal, diPos, ss14DiOp, ss14DiVal, signalWindowShort)
+        sCloseMet := true, sCurCloseRsn := "SS14a"
+    if not sCloseMet and enableSS14b and matchExit2(rsi, ss14bRsiOp, ss14bRsiVal, diPos, ss14bDiOp, ss14bDiVal, signalWindowShort)
+        sCloseMet := true, sCurCloseRsn := "SS14b"
+    if not sCloseMet and enableSS14c and matchExit2(rsi, ss14cRsiOp, ss14cRsiVal, diPos, ss14cDiOp, ss14cDiVal, signalWindowShort)
+        sCloseMet := true, sCurCloseRsn := "SS14c"
+    if not sCloseMet and enableSS14d and matchExit2(rsi, ss14dRsiOp, ss14dRsiVal, diPos, ss14dDiOp, ss14dDiVal, signalWindowShort)
+        sCloseMet := true, sCurCloseRsn := "SS14d"
+    if not sCloseMet and enableSS15 and matchExit2(vfi, ss15VfiOp, ss15VfiVal, diPos, ss15DiOp, ss15DiVal, signalWindowShort)
+        sCloseMet := true, sCurCloseRsn := "SS15a"
+    if not sCloseMet and enableSS15b and matchExit2(vfi, ss15bVfiOp, ss15bVfiVal, diPos, ss15bDiOp, ss15bDiVal, signalWindowShort)
+        sCloseMet := true, sCurCloseRsn := "SS15b"
+    if not sCloseMet and enableSS15c and matchExit2(vfi, ss15cVfiOp, ss15cVfiVal, diPos, ss15cDiOp, ss15cDiVal, signalWindowShort)
+        sCloseMet := true, sCurCloseRsn := "SS15c"
+    if not sCloseMet and enableSS15d and matchExit2(vfi, ss15dVfiOp, ss15dVfiVal, diPos, ss15dDiOp, ss15dDiVal, signalWindowShort)
+        sCloseMet := true, sCurCloseRsn := "SS15d"
+    if not sCloseMet and enableSS16 and matchExit3(rsi, ss16RsiOp, ss16RsiVal, vfi, ss16VfiOp, ss16VfiVal, diPos, ss16DiOp, ss16DiVal, signalWindowShort)
+        sCloseMet := true, sCurCloseRsn := "SS16a"
+    if not sCloseMet and enableSS16b and matchExit3(rsi, ss16bRsiOp, ss16bRsiVal, vfi, ss16bVfiOp, ss16bVfiVal, diPos, ss16bDiOp, ss16bDiVal, signalWindowShort)
+        sCloseMet := true, sCurCloseRsn := "SS16b"
+    if not sCloseMet and enableSS16c and matchExit3(rsi, ss16cRsiOp, ss16cRsiVal, vfi, ss16cVfiOp, ss16cVfiVal, diPos, ss16cDiOp, ss16cDiVal, signalWindowShort)
+        sCloseMet := true, sCurCloseRsn := "SS16c"
+    if not sCloseMet and enableSS16d and matchExit3(rsi, ss16dRsiOp, ss16dRsiVal, vfi, ss16dVfiOp, ss16dVfiVal, diPos, ss16dDiOp, ss16dDiVal, signalWindowShort)
+        sCloseMet := true, sCurCloseRsn := "SS16d"
+
+    if sCloseMet
+        sCloseReason := sCurCloseRsn
+        sSignalBar   := bar_index
+        if usePivotShortExitA or usePivotShortExitB or usePivotShortExitC or usePivotShortExitD
+            sPhase := 2
+        else
+            sTrailStop  := high[1]
+            sStopActive := true
+
+// ОЖИДАНИЕ ОКНА ПИВОТА
+if shortIsOpen and sPhase == 2
+    if bar_index - sSignalBar == pivotShortExitWinFwd
+        [pF, pE, maxLastBar] = pivotMultiPatternDetector(
+             usePivotShortExitA, pivotShortExitAFirst, pivotShortExitASecond,
+             usePivotShortExitB, pivotShortExitBFirst, pivotShortExitBSecond,
+             usePivotShortExitC, pivotShortExitCFirst, pivotShortExitCSecond,
+             usePivotShortExitD, pivotShortExitDFirst, pivotShortExitDSecond,
+             pivotShortExitWinBack, pivotShortExitWinFwd, sSignalBar)
+        
+        if pF
+            pivotDetectorResult := "Exit S: " + pE
+            stopOffset  = maxLastBar <= sSignalBar ? sSignalBar - 1 : maxLastBar - 1
+            sTrailStop  := high[bar_index - stopOffset]
+            sStopActive := true
+            sPhase      := 0
+        else
+            sPhase      := 0 // Отмена закрытия
+
+// ИСПОЛНЕНИЕ СТОПА ШОРТ
+if sStopActive and shortIsOpen
+    sTrailStop := math.min(nz(sTrailStop, high[1]), high[1])
+    strategy.exit("Stop S", "Short", stop=sTrailStop)
+    
+    // Внутрибарное срабатывание
+    if high >= sTrailStop
+        profitPct = ((sEntryPrice - sTrailStop) / sEntryPrice * 100)
+        lblColor  = profitPct >= 0 ? color.new(color.green, 10) : color.new(color.red, 10)
+        shortIsOpen  := false
+        sStopActive  := false
+        sPhase       := 0
+        sLastExitBar := bar_index
+        if showLabels
+            label.new(bar_index, sTrailStop, "ЗАКРЫТИЕ S\n" + sCloseReason + "\nЦена: " + str.tostring(sTrailStop,"#.##") + "\nP/L: " + str.tostring(profitPct,"#.##") + "%", color=lblColor, textcolor=color.white, style=label.style_label_up, size=size.normal)
+
+// ═══════════════════════════════════════════════════════════════════════════
+// ОТОБРАЖЕНИЕ И ТАБЛИЦА
+// ═══════════════════════════════════════════════════════════════════════════
+
+plot(lStopActive ? lTrailStop : na, "Стоп Лонг",  color.red,  3, plot.style_linebr)
+plot(sStopActive ? sTrailStop : na, "Стоп Шорт",  color.blue, 3, plot.style_linebr)
+
+// Цвет фона
+bgColor = longIsOpen and not shortIsOpen ? color.new(color.green, 95) : shortIsOpen and not longIsOpen ? color.new(color.red, 95) : longIsOpen and shortIsOpen ? color.new(color.yellow, 95) : na
+bgcolor(bgColor, title="Позиция")
+
+if showTable
+    var table t = table.new(position.top_right, 2, 17, border_width=1)
+    if barstate.islast
+        table.cell(t, 0, 0, "Параметр",  bgcolor=color.new(color.blue,70), text_color=color.white)
+        table.cell(t, 1, 0, "Значение",  bgcolor=color.new(color.blue,70), text_color=color.white)
+        
+        rsiBg = rsi < 30 ? color.new(color.red, 60) : rsi > 70 ? color.new(color.green, 60) : color.new(color.gray, 80)
+        table.cell(t, 0, 1, "RSI", text_color=color.white)
+        table.cell(t, 1, 1, str.tostring(rsi,  "#.##"), bgcolor=rsiBg, text_color=color.white)
+        
+        vfiBg = vfi > 10 ? color.new(color.green, 60) : vfi < -10 ? color.new(color.red, 60) : color.new(color.gray, 80)
+        table.cell(t, 0, 2, "VFI", text_color=color.white)
+        table.cell(t, 1, 2, str.tostring(vfi,  "#.##"), bgcolor=vfiBg, text_color=color.white)
+        
+        table.cell(t, 0, 3, "DI+", text_color=color.white)
+        table.cell(t, 1, 3, str.tostring(diPos,"#.##"), text_color=color.green)
+        
+        table.cell(t, 0, 4, "DI-", text_color=color.white)
+        table.cell(t, 1, 4, str.tostring(diNeg,"#.##"), text_color=color.red)
+        
+        table.cell(t, 0, 5, "ADX", text_color=color.white)
+        table.cell(t, 1, 5, str.tostring(adx,  "#.##"), text_color=color.white)
+        
+        table.cell(t, 0, 6, "Позиция", text_color=color.white)
+        posText  = longIsOpen and shortIsOpen ? "LONG + SHORT" : longIsOpen ? "LONG" : shortIsOpen ? "SHORT" : "НЕТ"
+        posBg    = longIsOpen and shortIsOpen ? color.new(color.yellow,60) : longIsOpen ? color.new(color.green,60) : shortIsOpen ? color.new(color.red,60) : color.new(color.gray,60)
+        table.cell(t, 1, 6, posText, bgcolor=posBg, text_color=color.white)
+        
+        table.cell(t, 0, 7, "Цена входа (L)", text_color=color.white)
+        table.cell(t, 1, 7, longIsOpen ? str.tostring(lEntryPrice, "#.##") : "—", text_color=color.yellow)
+        
+        table.cell(t, 0, 8, "Цена входа (S)", text_color=color.white)
+        table.cell(t, 1, 8, shortIsOpen ? str.tostring(sEntryPrice, "#.##") : "—", text_color=color.yellow)
+        
+        table.cell(t, 0, 9, "Причина входа", text_color=color.white)
+        table.cell(t, 1, 9, longIsOpen ? lBuyReason : shortIsOpen ? sEntryReason : "—", text_color=color.white)
+        
+        table.cell(t, 0, 10, "Красных подряд", text_color=color.white)
+        table.cell(t, 1, 10, str.tostring(redCount), text_color=color.red)
+        
+        table.cell(t, 0, 11, "Зелёных подряд", text_color=color.white)
+        table.cell(t, 1, 11, str.tostring(greenCount), text_color=color.green)
+        
+        table.cell(t, 0, 12, "Pivot Pattern", text_color=color.white)
+        table.cell(t, 1, 12, pivotDetectorResult != "" ? pivotDetectorResult : "—", text_color=color.orange)
+        
+        table.cell(t, 0, 13, "Фаза L", text_color=color.white)
+        table.cell(t, 1, 13, str.tostring(lPhase), text_color=color.white)
+        
+        table.cell(t, 0, 14, "Фаза S", text_color=color.white)
+        table.cell(t, 1, 14, str.tostring(sPhase), text_color=color.white)
+        
+        table.cell(t, 0, 15, "Стоп L", text_color=color.white)
+        table.cell(t, 1, 15, lStopActive ? str.tostring(lTrailStop,"#.##") : "—", text_color=color.red)
+        
+        table.cell(t, 0, 16, "Стоп S", text_color=color.white)
+        table.cell(t, 1, 16, sStopActive ? str.tostring(sTrailStop,"#.##") : "—", text_color=color.blue)
