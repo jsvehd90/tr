@@ -805,6 +805,7 @@ diPos = smTR != 0 ? smPos / smTR * 100 : 0.0
 diNeg = smTR != 0 ? smNeg / smTR * 100 : 0.0
 dx    = (diPos + diNeg) != 0 ? math.abs(diPos - diNeg) / (diPos + diNeg) * 100 : 0.0
 adx   = ta.sma(dx, adxLen)
+atrVal = ta.atr(14)
 
 // Фиксированные параметры пивотов
 pivotBars = 2
@@ -858,6 +859,7 @@ matchExit1(series float v1, string o1, float t1) =>
 
 matchExit2(series float v1, string o1, float t1, series float v2, string o2, float t2, int w) =>
     met = false
+    latestOff = 0  // One condition is always at current bar (offset 0), so latestOff is always 0
     if is_met(v1, o1, t1)
         for j = 0 to w
             if is_met(v2[j], o2, t2)
@@ -868,10 +870,11 @@ matchExit2(series float v1, string o1, float t1, series float v2, string o2, flo
             if is_met(v1[j], o1, t1)
                 met := true
                 break
-    [met, 0]
+    [met, latestOff]
 
 matchExit3(series float v1, string o1, float t1, series float v2, string o2, float t2, series float v3, string o3, float t3, int w) =>
     met = false
+    latestOff = 0  // One condition is always at current bar (offset 0), so latestOff is always 0
     if is_met(v1, o1, t1)
         for j = 0 to w
             if is_met(v2[j], o2, t2)
@@ -890,7 +893,7 @@ matchExit3(series float v1, string o1, float t1, series float v2, string o2, flo
                 for k = math.max(0, j-w) to j+w
                     if is_met(v1[k], o1, t1)
                         met := true
-    [met, 0]
+    [met, latestOff]
 
 // ═══════════════════════════════════════════════════════════════════════════
 // УНИВЕРСАЛЬНЫЙ ДЕТЕКТОР ПИВОТ-ПАТТЕРНОВ
@@ -1169,13 +1172,12 @@ if lDoLongEntry
     // FLIP логика
     if allowFlip and shortIsOpen
         profitPct = ((sEntryPrice - close) / sEntryPrice * 100)
-        lblColor  = profitPct >= 0 ? color.new(color.green, 10) : color.new(color.red, 10)
         strategy.close("Short", comment="Закрыт (Flip)")
         shortIsOpen := false
         sStopActive := false
         sPhase      := 0
         if showLabels
-            label.new(bar_index, high, "ЗАКРЫТИЕ ШОРТ (Flip)\nP/L: " + str.tostring(profitPct, "#.##") + "%", color=lblColor, textcolor=color.white, style=label.style_label_down, size=size.small)
+            label.new(bar_index, low, "ЗАКРЫТИЕ ШОРТ (Flip)\nP/L: " + str.tostring(profitPct, "#.##") + "%", color=color.purple, textcolor=color.white, style=label.style_label_up, size=size.tiny)
     
     // Открытие
     if not longIsOpen
@@ -1208,7 +1210,7 @@ if longIsOpen and lPhase == 0 and not lStopActive and bar_index > lEntryBar
         lTrailStop  := low[1]
         lStopActive := true
         if showLabels
-            label.new(bar_index, high, "ПРЯМАЯ ПРОДАЖА L\n" + directSellRsn, color=color.purple, textcolor=color.white, style=label.style_label_down, size=size.small)
+            label.new(bar_index, low, "ПРЯМАЯ ПРОДАЖА L\n" + directSellRsn, color=color.fuchsia, textcolor=color.white, style=label.style_label_up, size=size.small)
 
 // ОСНОВНАЯ ПРОДАЖА ЛОНГ
 lSellMet    = false
@@ -1337,13 +1339,13 @@ if lStopActive and longIsOpen
     // Внутрибарное срабатывание - проверяем достижение стопа
     if low <= lTrailStop
         profitPct = ((lTrailStop - lEntryPrice) / lEntryPrice * 100)
-        lblColor  = profitPct >= 0 ? color.new(color.green, 10) : color.new(color.red, 10)
+        lblColor  = profitPct >= 0 ? color.lime : color.orange
         longIsOpen  := false
         lStopActive := false
         lPhase      := 0
         lLastExitBar := bar_index
         if showLabels
-            label.new(bar_index, lTrailStop, "ПРОДАЖА L\n" + lSellReason + "\nЦена: " + str.tostring(lTrailStop,"#.##") + "\nP/L: " + str.tostring(profitPct,"#.##") + "%", color=lblColor, textcolor=color.white, style=label.style_label_down, size=size.normal)
+            label.new(bar_index, low - atrVal * 0.5, "ПРОДАЖА L\n" + lSellReason + "\nЦена: " + str.tostring(lTrailStop,"#.##") + "\nP/L: " + str.tostring(profitPct,"#.##") + "%", color=lblColor, textcolor=color.white, style=label.style_label_up, size=size.small)
 
 // ═══════════════════════════════════════════════════════════════════════════
 // ЛОГИКА ШОРТА (ВХОД)
@@ -1492,13 +1494,12 @@ if sDoShortEntry
     // FLIP логика
     if allowFlip and longIsOpen
         profitPct = ((close - lEntryPrice) / lEntryPrice * 100)
-        lblColor  = profitPct >= 0 ? color.new(color.green, 10) : color.new(color.red, 10)
         strategy.close("Long", comment="Закрыт (Flip)")
         longIsOpen  := false
         lStopActive := false
         lPhase      := 0
         if showLabels
-            label.new(bar_index, low, "ЗАКРЫТИЕ ЛОНГ (Flip)\nP/L: " + str.tostring(profitPct, "#.##") + "%", color=lblColor, textcolor=color.white, style=label.style_label_up, size=size.small)
+            label.new(bar_index, high, "ЗАКРЫТИЕ ЛОНГ (Flip)\nP/L: " + str.tostring(profitPct, "#.##") + "%", color=color.purple, textcolor=color.white, style=label.style_label_down, size=size.tiny)
     
     // Открытие
     if not shortIsOpen
@@ -1529,7 +1530,7 @@ if shortIsOpen and sPhase == 0 and not sStopActive and bar_index > sEntryBar
         sTrailStop   := high[1]
         sStopActive  := true
         if showLabels
-            label.new(bar_index, low, "ПРЯМОЕ ЗАКРЫТИЕ S\n" + directCloseRsn, color=color.purple, textcolor=color.white, style=label.style_label_up, size=size.small)
+            label.new(bar_index, high, "ПРЯМОЕ ЗАКРЫТИЕ S\n" + directCloseRsn, color=color.fuchsia, textcolor=color.white, style=label.style_label_down, size=size.small)
 
 // ОСНОВНОЕ ЗАКРЫТИЕ ШОРТА
 sCloseMet    = false
@@ -1658,13 +1659,13 @@ if sStopActive and shortIsOpen
     // Внутрибарное срабатывание
     if high >= sTrailStop
         profitPct = ((sEntryPrice - sTrailStop) / sEntryPrice * 100)
-        lblColor  = profitPct >= 0 ? color.new(color.green, 10) : color.new(color.red, 10)
+        lblColor  = profitPct >= 0 ? color.lime : color.orange
         shortIsOpen  := false
         sStopActive  := false
         sPhase       := 0
         sLastExitBar := bar_index
         if showLabels
-            label.new(bar_index, sTrailStop, "ЗАКРЫТИЕ S\n" + sCloseReason + "\nЦена: " + str.tostring(sTrailStop,"#.##") + "\nP/L: " + str.tostring(profitPct,"#.##") + "%", color=lblColor, textcolor=color.white, style=label.style_label_up, size=size.normal)
+            label.new(bar_index, high + atrVal * 0.5, "ЗАКРЫТИЕ S\n" + sCloseReason + "\nЦена: " + str.tostring(sTrailStop,"#.##") + "\nP/L: " + str.tostring(profitPct,"#.##") + "%", color=lblColor, textcolor=color.white, style=label.style_label_down, size=size.small)
 
 // ═══════════════════════════════════════════════════════════════════════════
 // ОТОБРАЖЕНИЕ И ТАБЛИЦА
