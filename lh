@@ -830,7 +830,7 @@ if not na(ph)
         array.shift(phTypes)
 
 if not na(pl)
-    plType = na(lastPivotLow) or pl > lastPivotLow ? "HL" : "LL"
+    plType = na(lastPivotLow) ? "LL" : (pl < lastPivotLow ? "LL" : "HL")
     array.push(plBarIndices, bar_index - pivotBars)
     array.push(plTypes, plType)
     lastPivotLow := pl
